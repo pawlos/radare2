@@ -17,7 +17,7 @@ static void free_dbi_stream(void *stream) {
 		free(dbi_ex_header->objName.name);
 		free(dbi_ex_header);
 	}
-	r_list_free(t->dbiexhdrs);
+	r_list_free (t->dbiexhdrs);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -88,9 +88,7 @@ static int parse_dbi_ex_header(char *data, int max_len, SDBIExHeader *dbi_ex_hea
 	parse_sctring(&dbi_ex_header->modName, (unsigned char *)data, &read_bytes, max_len);
 	data += (read_bytes - before_read_bytes);
 
-	before_read_bytes = read_bytes;
 	parse_sctring(&dbi_ex_header->objName, (unsigned char *)data, &read_bytes, max_len);
-	data += (read_bytes - before_read_bytes);
 
 	return read_bytes;
 }
@@ -136,7 +134,7 @@ void parse_dbi_stream(void *parsed_pdb_stream, R_STREAM_FILE *stream_file) {
 	}
 	stream_file_read (stream_file, size, dbiexhdr_data);
 
-	dbi_stream->dbiexhdrs = r_list_new();
+	dbi_stream->dbiexhdrs = r_list_new ();
 	p_tmp = dbiexhdr_data;
 	while (i < size) {
 		dbi_ex_header = (SDBIExHeader *) malloc (sizeof(SDBIExHeader));

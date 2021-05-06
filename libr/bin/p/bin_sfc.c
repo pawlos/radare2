@@ -101,7 +101,7 @@ static void addsym(RList *ret, const char *name, ut64 addr, ut32 size) {
 	if (!ptr) {
 		return;
 	}
-	ptr->name = strdup (name? name: "");
+	ptr->name = strdup (r_str_get (name));
 	ptr->paddr = ptr->vaddr = addr;
 	ptr->size = size;
 	ptr->ordinal = 0;
@@ -176,7 +176,7 @@ static RList *mem (RBinFile *bf) {
 	RList *ret;
 	RBinMem *m;
 	RBinMem *m_bak;
-	if (!(ret = r_list_new())) {
+	if (!(ret = r_list_new ())) {
 		return NULL;
 	}
 	ret->free = free;

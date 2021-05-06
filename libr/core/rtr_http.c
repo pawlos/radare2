@@ -23,10 +23,8 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 
 	if (!r_file_is_directory (root)) {
 		if (!r_file_is_directory (homeroot)) {
-			eprintf ("Cannot find http.root (%s) or http.homeroot (%s)\n", root, homeroot);
-			return false;
+			eprintf ("Cannot find http.root or http.homeroot\n");
 		}
-		return false;
 	}
 	if (!path) {
 		return false;
@@ -40,7 +38,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 		r_config_set (core->config, "http.port", port);
 		path = NULL;
 	} else {
-		if (core->file && (!path || !*path)) {
+		if (core->io->desc && (!path || !*path)) {
 			if (!strcmp (httpui, "p")
 			|| !strcmp (httpui, "m")
 			|| !strcmp (httpui, "enyo")
@@ -90,7 +88,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 	if (browse == 'H') {
 		const char *browser = r_config_get (core->config, "http.browser");
 		r_sys_cmdf ("%s http://%s:%d/%s &",
-			browser, host, atoi (port), path? path:"");
+			browser, host, atoi (port), r_str_get (path));
 	}
 
 	so.httpauth = r_config_get_i (core->config, "http.auth");
@@ -102,8 +100,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 			return 1;
 		}
 
-		int sz;
-		pfile = r_file_slurp (httpauthfile, &sz);
+		pfile = r_file_slurp (httpauthfile, NULL);
 
 		if (pfile) {
 			so.authtokens = r_str_split_list (pfile, "\n", 0);
@@ -266,10 +263,10 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 					} else {
 						char *path = r_file_root (uproot, rs->path + 4);
 						if (r_file_exists (path)) {
-							int sz = 0;
+							size_t sz = 0;
 							char *f = r_file_slurp (path, &sz);
 							if (f) {
-								r_socket_http_response (rs, 200, f, sz, headers);
+								r_socket_http_response (rs, 200, f, (int)sz, headers);
 								free (f);
 							} else {
 								r_socket_http_response (rs, 403, "Permission denied", 0, headers);
@@ -377,7 +374,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 			} else {
 				const char *root = r_config_get (core->config, "http.root");
 				const char *homeroot = r_config_get (core->config, "http.homeroot");
-				char *path;
+				char *path = NULL;
 				if (!strcmp (rs->path, "/")) {
 					free (rs->path);
 					if (*index == '/') {
@@ -417,7 +414,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 					}
 				}
 				if (r_file_exists (path)) {
-					int sz = 0;
+					size_t sz = 0;
 					char *f = r_file_slurp (path, &sz);
 					if (f) {
 						const char *ct = NULL;
@@ -431,7 +428,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 							ct = "Content-Type: text/html\n";
 						}
 						char *hdr = r_str_newf ("%s%s", ct, headers);
-						r_socket_http_response (rs, 200, f, sz, hdr);
+						r_socket_http_response (rs, 200, f, (int)sz, hdr);
 						free (hdr);
 						free (f);
 					} else {
@@ -523,7 +520,7 @@ static RThreadFunctionRet r_core_rtr_http_thread (RThread *th) {
 	if (!ht || !ht->core) {
 		return false;
 	}
-	eprintf ("WARNING: Background webserver requires http.sandbox=false to run properly\n");
+	eprintf ("Warning: Background webserver requires http.sandbox=false to run properly\n");
 	int ret = r_core_rtr_http_run (ht->core, ht->launch, ht->browse, ht->path);
 	R_FREE (ht->path);
 	if (ret) {
@@ -570,7 +567,7 @@ R_API int r_core_rtr_http(RCore *core, int launch, int browse, const char *path)
 			eprintf ("TODO: Use different eval environ for scr. for the web\n");
 			eprintf ("TODO: Visual mode should be enabled on local\n");
 		} else {
-			const char *tpath = r_str_trim_ro (path + 1);
+			const char *tpath = r_str_trim_head_ro (path + 1);
 			//HttpThread ht = { core, launch, strdup (tpath) };
 			HttpThread *ht = calloc (sizeof (HttpThread), 1);
 			ht->core = core;

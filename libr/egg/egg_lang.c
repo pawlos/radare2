@@ -413,13 +413,26 @@ static void rcc_element(REgg *egg, char *str) {
 				eprintf ("global-buffer-overflow in syscalls\n");
 				break;
 			}
+			{
+			bool found = false;
+			int idx = egg->lang.nsyscalls;
+			for (i = 0; i < egg->lang.nsyscalls; i++) {
+				if (!strcmp (egg->lang.dstvar, egg->lang.syscalls[i].name)) {
+					idx = i;
+					found = true;
+					break;
+				}
+			}
 			// XXX the mem for name and arg are not freed - MEMLEAK
-			R_FREE (egg->lang.syscalls[egg->lang.nsyscalls].name);
-			R_FREE (egg->lang.syscalls[egg->lang.nsyscalls].arg);
-			egg->lang.syscalls[egg->lang.nsyscalls].name = strdup (egg->lang.dstvar);
-			egg->lang.syscalls[egg->lang.nsyscalls].arg = strdup (str);
-			egg->lang.nsyscalls++;
+			R_FREE (egg->lang.syscalls[idx].name);
+			R_FREE (egg->lang.syscalls[idx].arg);
+			egg->lang.syscalls[idx].name = strdup (egg->lang.dstvar);
+			egg->lang.syscalls[idx].arg = strdup (str);
+			if (!found) {
+				egg->lang.nsyscalls++;
+			}
 			R_FREE (egg->lang.dstvar);
+			}
 			break;
 		case GOTO:
 			egg->lang.elem[egg->lang.elem_n] = 0;
@@ -574,12 +587,12 @@ R_API char *r_egg_mkvar(REgg *egg, char *out, const char *_str, int delta) {
 					for (i = 0; i < egg->lang.nsyscalls; i++) {
 						if (!strcmp (egg->lang.syscalls[i].name, egg->lang.callname)) {
 							free (oldstr);
-							return strdup (egg->lang.syscalls[i].arg);
+							return strdup (r_str_get (egg->lang.syscalls[i].arg));
 						}
 					}
-					eprintf ("Unknown arg for syscall '%s'\n", egg->lang.callname);
+					eprintf ("Unknown arg for syscall '%s'\n", r_str_get (egg->lang.callname));
 				} else {
-					eprintf ("NO CALLNAME '%s'\n", egg->lang.callname);
+					eprintf ("NO CALLNAME '%s'\n", r_str_get (egg->lang.callname));
 				}
 			}
 		} else if (!strncmp (str + 1, "reg", 3)) {
@@ -601,7 +614,7 @@ R_API char *r_egg_mkvar(REgg *egg, char *out, const char *_str, int delta) {
 		str++;
 		len = strlen (str) - 1;
 		if (!egg->lang.stackfixed || egg->lang.stackfixed < len) {
-			eprintf ("WARNING: No room in the static stackframe! (%d must be %d)\n",
+			eprintf ("Warning: No room in the static stackframe! (%d must be %d)\n",
 				egg->lang.stackfixed, len);
 		}
 		str[len] = '\0';
@@ -720,7 +733,7 @@ static void rcc_fun(REgg *egg, const char *str) {
 }
 
 #if 0
-static void shownested() {
+static void shownested(void) {
 	int i;
 	eprintf ("[[[NESTED %d]]] ", context);
 	for (i = 0; egg->lang.nested[i]; i++) {
@@ -805,7 +818,6 @@ static void rcc_context(REgg *egg, int delta) {
 // eprintf ("END BLOCK %d, (%s)\n", context, egg->lang.nested[context-1]);
 // eprintf ("CN = (%s) %d (%s) delta=%d\n", cn, context, egg->lang.nested[context-1], delta);
 		if (egg->lang.callname) {
-			// if (callname) { // handle 'foo() {'
 			/* TODO: this must be an array */
 			char *b, *g, *e, *n;
 			emit->comment (egg, "cond frame %s (%s)", egg->lang.callname, elm);
@@ -1037,7 +1049,8 @@ static void rcc_next(REgg *egg) {
 		if (!strcmp (str, "while")) {
 			char var[128];
 			if (egg->lang.lastctxdelta >= 0) {
-				exit (eprintf ("ERROR: Unsupported while syntax\n"));
+				eprintf ("ERROR: Unsupported while syntax\n");
+				return;
 			}
 			sprintf (var, "__begin_%d_%d_%d\n", egg->lang.nfunctions, CTX, egg->lang.nestedi[CTX - 1]);
 			e->while_end (egg, var);// get_frame_label (1));
@@ -1149,7 +1162,6 @@ static void rcc_next(REgg *egg) {
 		if (*ptr) {
 			eq = strchr (ptr, '=');
 			if (eq) {
-				char *p = (char *) skipspaces (ptr);
 				vs = egg->lang.varsize;
 				*buf = *eq = '\x00';
 				e->mathop (egg, '=', vs, '$', "0", e->regs (egg, 1));
@@ -1160,7 +1172,7 @@ static void rcc_next(REgg *egg) {
 				R_FREE (egg->lang.mathline);
 				tmp = NULL;
 				// following code block is too ugly, oh noes
-				p = r_egg_mkvar (egg, buf, ptr, 0);
+				char *p = r_egg_mkvar (egg, buf, ptr, 0);
 				if (is_var (p)) {
 					char *q = r_egg_mkvar (egg, buf, p, 0);
 					if (q) {
@@ -1281,9 +1293,9 @@ R_API int r_egg_lang_parsechar(REgg *egg, char c) {
 	}
 	if (egg->lang.slurp) {
 		if (egg->lang.slurp != '"' && c == egg->lang.slurpin) {	// only happend when (...(...)...)
-			exit (eprintf (
-					"%s:%d Nesting of expressions not yet supported\n",
-					egg->lang.file, egg->lang.line));
+			eprintf ("%s:%d Nesting of expressions not yet supported\n",
+					egg->lang.file, egg->lang.line);
+			return -1;
 		}
 		if (c == egg->lang.slurp && egg->lang.oc != '\\') {	// close egg->lang.slurp
 			egg->lang.elem[egg->lang.elem_n] = '\0';

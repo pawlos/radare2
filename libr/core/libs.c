@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include "r_core.h"
 #include "config.h"
@@ -13,6 +13,7 @@
 	}\
 	static int __lib_ ## x ## _dt (RLibPlugin * pl, void *p, void *u) { return true; }
 
+// TODO: deprecate this
 #define CB_COPY(x, y)\
 	static int __lib_ ## x ## _cb (RLibPlugin * pl, void *user, void *data) {\
 		struct r_ ## x ## _plugin_t *hand = (struct r_ ## x ## _plugin_t *)data;\
@@ -36,17 +37,26 @@ CB (debug, dbg)
 CB (bp, dbg->bp)
 CB (lang, lang)
 CB (anal, anal)
-CB (asm, assembler)
+#define r_anal_esil_add r_anal_esil_plugin_add
+CB (anal_esil, anal->esil)
+CB (asm, rasm)
 CB (parse, parser)
 CB (bin, bin)
 CB (egg, egg)
 CB (fs, fs)
 
-static void __openPluginsAt(RCore *core, const char *arg) {
-	char *pdir = r_str_r2_prefix (arg);
-	if (pdir) {
-		r_lib_opendir (core->lib, pdir);
-		free (pdir);
+static void __openPluginsAt(RCore *core, const char *arg, const char *user_path) {
+	if (arg && *arg) {
+		if (user_path) {
+			if (r_str_endswith (user_path, arg)) {
+				return;
+			}
+		}
+		char *pdir = r_str_r2_prefix (arg);
+		if (pdir) {
+			r_lib_opendir (core->lib, pdir);
+			free (pdir);
+		}
 	}
 }
 
@@ -58,8 +68,9 @@ static void __loadSystemPlugins(RCore *core, int where, const char *path) {
 	if (path) {
 		r_lib_opendir (core->lib, path);
 	}
+	const char *dir_plugins = r_config_get (core->config, "dir.plugins");
 	if (where & R_CORE_LOADLIBS_CONFIG) {
-		r_lib_opendir (core->lib, r_config_get (core->config, "dir.plugins"));
+		r_lib_opendir (core->lib, dir_plugins);
 	}
 	if (where & R_CORE_LOADLIBS_ENV) {
 		char *p = r_sys_getenv (R_LIB_ENV);
@@ -76,15 +87,15 @@ static void __loadSystemPlugins(RCore *core, int where, const char *path) {
 		}
 	}
 	if (where & R_CORE_LOADLIBS_SYSTEM) {
-		__openPluginsAt (core, R2_PLUGINS);
-		__openPluginsAt (core, R2_EXTRAS);
-		__openPluginsAt (core, R2_BINDINGS);
+		__openPluginsAt (core, R2_PLUGINS, dir_plugins);
+		__openPluginsAt (core, R2_EXTRAS, dir_plugins);
+		__openPluginsAt (core, R2_BINDINGS, dir_plugins);
 	}
 #endif
 }
 
 R_API void r_core_loadlibs_init(RCore *core) {
-	ut64 prev = r_sys_now ();
+	ut64 prev = r_time_now_mono ();
 #define DF(x, y, z) r_lib_add_handler (core->lib, R_LIB_TYPE_ ## x, y, &__lib_ ## z ## _cb, &__lib_ ## z ## _dt, core);
 	core->lib = r_lib_new (NULL, NULL);
 	DF (IO, "io plugins", io);
@@ -93,16 +104,34 @@ R_API void r_core_loadlibs_init(RCore *core) {
 	DF (BP, "debugger breakpoint plugins", bp);
 	DF (LANG, "language plugins", lang);
 	DF (ANAL, "analysis plugins", anal);
+	DF (ESIL, "esil emulation plugins", anal_esil);
 	DF (ASM, "(dis)assembler plugins", asm);
 	DF (PARSE, "parsing plugins", parse);
 	DF (BIN, "bin plugins", bin);
 	DF (EGG, "egg plugins", egg);
 	DF (FS, "fs plugins", fs);
-	core->times->loadlibs_init_time = r_sys_now () - prev;
+	core->times->loadlibs_init_time = r_time_now_mono () - prev;
 }
 
-R_API int r_core_loadlibs(RCore *core, int where, const char *path) {
-	ut64 prev = r_sys_now ();
+static bool __isScriptFilename(const char *name) {
+	const char *ext = r_str_lchr (name, '.');
+	if (ext) {
+		ext++;
+		if (!strcmp (ext, "py")
+		||  !strcmp (ext, "js")
+		||  !strcmp (ext, "v")
+		||  !strcmp (ext, "c")
+		||  !strcmp (ext, "vala")
+		||  !strcmp (ext, "pl")
+		||  !strcmp (ext, "lua")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+R_API bool r_core_loadlibs(RCore *core, int where, const char *path) {
+	ut64 prev = r_time_now_mono ();
 	__loadSystemPlugins (core, where, path);
 	/* TODO: all those default plugin paths should be defined in r_lib */
 	if (!r_config_get_i (core->config, "cfg.plugins")) {
@@ -115,14 +144,12 @@ R_API int r_core_loadlibs(RCore *core, int where, const char *path) {
 	RListIter *iter;
 	char *file;
 	r_list_foreach (files, iter, file) {
-		bool isScript = r_str_endswith (file, ".py") || r_str_endswith (file, ".js") || r_str_endswith (file, ".lua");
-		if (isScript) {
-			r_core_cmdf (core, ". %s/%s", homeplugindir, file);
+		if (__isScriptFilename (file)) {
+			r_core_cmdf (core, "\". %s/%s\"", homeplugindir, file);
 		}
 	}
-	
-	free (homeplugindir);
-	core->times->loadlibs_time = r_sys_now () - prev;
 	r_list_free (files);
+	free (homeplugindir);
+	core->times->loadlibs_time = r_time_now_mono () - prev;
 	return true;
 }

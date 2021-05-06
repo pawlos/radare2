@@ -52,9 +52,11 @@ struct symbol_t {
 	ut64 offset;
 	ut64 addr;
 	ut64 size;
+	int bits;
 	int type;
-	char name[R_BIN_MACH0_STRING_LENGTH];
-	int last;
+	bool is_imported;
+	char *name;
+	bool last;
 };
 
 struct import_t {
@@ -71,6 +73,9 @@ struct reloc_t {
 	int ord;
 	int last;
 	char name[256];
+	bool external;
+	bool pc_relative;
+	ut8 size;
 };
 
 struct addr_t {
@@ -112,6 +117,7 @@ struct MACH0_(obj_t) {
 	char *intrp;
 	char *compiler;
 	int nsegs;
+	struct r_dyld_chained_starts_in_segment **chained_starts;
 	struct MACH0_(section) *sects;
 	int nsects;
 	struct MACH0_(nlist) *symtab;
@@ -168,6 +174,8 @@ struct MACH0_(obj_t) {
 	ut64 (*va2pa)(ut64 p, ut32 *offset, ut32 *left, RBinFile *bf);
 	struct symbol_t *symbols;
 	ut64 main_addr;
+	int (*original_io_read)(RIO *io, RIODesc *fd, ut8 *buf, int count);
+	bool rebasing_buffer;
 };
 
 void MACH0_(opts_set_default)(struct MACH0_(opts_t) *options, RBinFile *bf);

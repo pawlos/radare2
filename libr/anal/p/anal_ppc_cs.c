@@ -2,8 +2,8 @@
 
 #include <r_anal.h>
 #include <r_lib.h>
-#include <capstone/capstone.h>
-#include <capstone/ppc.h>
+#include <capstone.h>
+#include <ppc.h>
 #include "../../asm/arch/ppc/libvle/vle.h"
 
 #define SPR_HID0 0x3f0 /* Hardware Implementation Register 0 */
@@ -65,27 +65,6 @@ static const char* cmask32(const char *mb_c, const char *me_c) {
 	}
 	snprintf (cmask, sizeof (cmask), "0x%"PFMT32x"", mask32 (mb, me));
 	return cmask;
-}
-
-static const char *getreg(struct Getarg *gop, int n) {
-	cs_insn *insn = gop->insn;
-	csh handle = gop->handle;
-
-	if (n < 0 || n >= 8) {
-		return NULL;
-	}
-	cs_ppc_op op = INSOP (n);
-	switch (op.type) {
-	case PPC_OP_REG:
-		return cs_reg_name (handle, op.reg);
-	case PPC_OP_MEM:
-		return cs_reg_name (handle, op.mem.base);
-	case PPC_OP_INVALID:
-	case PPC_OP_IMM:
-	case PPC_OP_CRX: // Condition Register field
-		return NULL;
-	}
-	return NULL;
 }
 
 static char *getarg2(struct Getarg *gop, int n, const char *setstr) {
@@ -183,49 +162,51 @@ static const char* getspr(struct Getarg *gop, int n) {
 
 static void opex(RStrBuf *buf, csh handle, cs_insn *insn) {
 	int i;
-	r_strbuf_init (buf);
-	r_strbuf_append (buf, "{");
-	cs_sysz *x = &insn->detail->sysz;
-	r_strbuf_append (buf, "\"operands\":[");
+	PJ *pj = pj_new ();
+	if (!pj) {
+		return;
+	}
+	pj_o (pj);
+	pj_ka (pj, "operands");
+	cs_ppc *x = &insn->detail->ppc;
 	for (i = 0; i < x->op_count; i++) {
-		cs_sysz_op *op = &x->operands[i];
-		if (i > 0) {
-			r_strbuf_append (buf, ",");
-		}
-		r_strbuf_append (buf, "{");
+		cs_ppc_op *op = x->operands + i;
+		pj_o (pj);
 		switch (op->type) {
-		case SYSZ_OP_REG:
-			r_strbuf_append (buf, "\"type\":\"reg\"");
-			r_strbuf_appendf (buf, ",\"value\":\"%s\"", cs_reg_name (handle, op->reg));
+		case PPC_OP_REG:
+			pj_ks (pj, "type", "reg");
+			pj_ks (pj, "value", cs_reg_name (handle, op->reg));
 			break;
-		case SYSZ_OP_IMM:
-			r_strbuf_append (buf, "\"type\":\"imm\"");
-			r_strbuf_appendf (buf, ",\"value\":%"PFMT64d, op->imm);
+		case PPC_OP_IMM:
+			pj_ks (pj, "type", "imm");
+			pj_kN (pj, "value", op->imm);
 			break;
-		case SYSZ_OP_MEM:
-			r_strbuf_append (buf, "\"type\":\"mem\"");
-			if (op->mem.base != SYSZ_REG_INVALID) {
-				r_strbuf_appendf (buf, ",\"base\":\"%s\"", cs_reg_name (handle, op->mem.base));
+		case PPC_OP_MEM:
+			pj_ks (pj, "type", "mem");
+			if (op->mem.base != PPC_REG_INVALID) {
+				pj_ks (pj, "base", cs_reg_name (handle, op->mem.base));
 			}
-			r_strbuf_appendf (buf, ",\"index\":%"PFMT64d"", (st64) op->mem.index);
-			r_strbuf_appendf (buf, ",\"length\":%"PFMT64d"", (st64) op->mem.length);
-			r_strbuf_appendf (buf, ",\"disp\":%"PFMT64d"", (st64) op->mem.disp);
+			pj_ki (pj, "disp", op->mem.disp);
 			break;
 		default:
-			r_strbuf_append (buf, "\"type\":\"invalid\"");
+			pj_ks (pj, "type", "invalid");
 			break;
 		}
-		r_strbuf_append (buf, "}");
+		pj_end (pj); /* o operand */
 	}
-	r_strbuf_append (buf, "]}");
+	pj_end (pj); /* a operands */
+	pj_end (pj);
+
+	r_strbuf_init (buf);
+	r_strbuf_append (buf, pj_string (pj));
+	pj_free (pj);
 }
 
 #define PPCSPR(n) getspr(&gop, n)
 #define ARG(n) getarg2(&gop, n, "")
 #define ARG2(n,m) getarg2(&gop, n, m)
-#define REG2(n) getreg(&gop, n)
 
-static int set_reg_profile(RAnal *anal) {
+static bool set_reg_profile(RAnal *anal) {
 	const char *p = NULL;
 	if (anal->bits == 32) {
 		p =
@@ -333,6 +314,7 @@ static int set_reg_profile(RAnal *anal) {
 			"=PC	pc\n"
 			"=SP	r1\n"
 			"=SR	srr1\n" // status register ??
+			"=SN	r0\n" // also for ret
 			"=A0	r3\n" // also for ret
 			"=A1	r4\n"
 			"=A2	r5\n"
@@ -534,28 +516,82 @@ static int parse_reg_name(RRegItem *reg, csh handle, cs_insn *insn, int reg_num)
 	return 0;
 }
 
-static void op_fillval(RAnalOp *op, csh handle, cs_insn *insn) {
-	static RRegItem reg;
-	switch (op->type & R_ANAL_OP_TYPE_MASK) {
-	case R_ANAL_OP_TYPE_LOAD:
-		if (INSOP(1).type == PPC_OP_MEM) {
-			ZERO_FILL (reg);
-			op->src[0] = r_anal_value_new ();
-			op->src[0]->reg = &reg;
-			parse_reg_name (op->src[0]->reg, handle, insn, 1);
-			op->src[0]->delta = INSOP(1).mem.disp;
-		}
+static RRegItem base_regs[4];
+
+static void create_src_dst(RAnalOp *op) {
+	op->src[0] = r_anal_value_new ();
+	op->src[1] = r_anal_value_new ();
+	op->src[2] = r_anal_value_new ();
+	op->dst = r_anal_value_new ();
+	ZERO_FILL (base_regs[0]);
+	ZERO_FILL (base_regs[1]);
+	ZERO_FILL (base_regs[2]);
+	ZERO_FILL (base_regs[3]);
+}
+
+static void set_src_dst(RAnalValue *val, csh *handle, cs_insn *insn, int x) {
+	cs_ppc_op ppcop = INSOP (x);
+	parse_reg_name (&base_regs[x], *handle, insn, x);
+	switch (ppcop.type) {
+	case PPC_OP_REG:
 		break;
-	case R_ANAL_OP_TYPE_STORE:
-		if (INSOP(1).type == PPC_OP_MEM) {
-			ZERO_FILL (reg);
-			op->dst = r_anal_value_new ();
-			op->dst->reg = &reg;
-			parse_reg_name (op->dst->reg, handle, insn, 1);
-			op->dst->delta = INSOP(1).mem.disp;
-		}
+	case PPC_OP_MEM:
+		val->delta = ppcop.mem.disp;
+		break;
+	case PPC_OP_IMM:
+		val->imm = ppcop.imm;
+		break;
+	default:
 		break;
 	}
+	val->reg = &base_regs[x];
+}
+
+static void op_fillval(RAnalOp *op, csh handle, cs_insn *insn) {
+	create_src_dst (op);
+	switch (op->type & R_ANAL_OP_TYPE_MASK) {
+	case R_ANAL_OP_TYPE_MOV:
+	case R_ANAL_OP_TYPE_CMP:
+	case R_ANAL_OP_TYPE_ADD:
+	case R_ANAL_OP_TYPE_SUB:
+	case R_ANAL_OP_TYPE_MUL:
+	case R_ANAL_OP_TYPE_DIV:
+	case R_ANAL_OP_TYPE_SHR:
+	case R_ANAL_OP_TYPE_SHL:
+	case R_ANAL_OP_TYPE_SAL:
+	case R_ANAL_OP_TYPE_SAR:
+	case R_ANAL_OP_TYPE_OR:
+	case R_ANAL_OP_TYPE_AND:
+	case R_ANAL_OP_TYPE_XOR:
+	case R_ANAL_OP_TYPE_NOR:
+	case R_ANAL_OP_TYPE_NOT:
+	case R_ANAL_OP_TYPE_LOAD:
+	case R_ANAL_OP_TYPE_LEA:
+	case R_ANAL_OP_TYPE_ROR:
+	case R_ANAL_OP_TYPE_ROL:
+	case R_ANAL_OP_TYPE_CAST:
+		set_src_dst (op->src[2], &handle, insn, 3);
+		set_src_dst (op->src[1], &handle, insn, 2);
+		set_src_dst (op->src[0], &handle, insn, 1);
+		set_src_dst (op->dst, &handle, insn, 0);
+		break;
+	case R_ANAL_OP_TYPE_STORE:
+		set_src_dst (op->dst, &handle, insn, 1);
+		set_src_dst (op->src[0], &handle, insn, 0);
+		break;
+	}
+}
+
+static char *shrink(char *op) {
+	if (!op) {
+		return NULL;
+	}
+	size_t len = strlen(op);
+	if (!len) {
+		return NULL;
+	}
+	op[len - 1] = 0;
+	return op;
 }
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
@@ -563,14 +599,10 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 	static int omode = -1, obits = -1;
 	int n, ret;
 	cs_insn *insn;
+	char *op1;
 	int mode = (a->bits == 64) ? CS_MODE_64 : (a->bits == 32) ? CS_MODE_32 : 0;
 	mode |= a->big_endian ? CS_MODE_BIG_ENDIAN : CS_MODE_LITTLE_ENDIAN;
 
-	op->delay = 0;
-	op->type = R_ANAL_OP_TYPE_NULL;
-	op->jump = UT64_MAX;
-	op->fail = UT64_MAX;
-	op->ptr = op->val = UT64_MAX;
 	if (a->cpu && strncmp (a->cpu, "vle", 3) == 0) {
 		// vle is big-endian only
 		if (!a->big_endian) {
@@ -596,9 +628,6 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
 	}
 	op->size = 4;
-
-	r_strbuf_init (&op->esil);
-	r_strbuf_set (&op->esil, "");
 
 	// capstone-next
 	n = cs_disasm (handle, (const ut8*)buf, len, addr, 1, &insn);
@@ -713,7 +742,15 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 			break;
 		case PPC_INS_STWU:
 			op->type = R_ANAL_OP_TYPE_STORE;
-			esilprintf (op, "%s,%s,4,%s,+=", ARG (0), ARG2 (1, "=[4]"), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,%s,=[4],%s=", ARG (0), op1, op1);
+			if (strstr (op1, "r1")) {
+				op->stackop = R_ANAL_STACK_INC;
+				op->stackptr = -atoi (op1);
+			}
 			break;
 		case PPC_INS_STWBRX:
 			op->type = R_ANAL_OP_TYPE_STORE;
@@ -724,7 +761,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 			break;
 		case PPC_INS_STBU:
 			op->type = R_ANAL_OP_TYPE_STORE;
-			esilprintf (op, "%s,%s,1,%s,+=", ARG (0), ARG2 (1, "=[1]"), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,%s,=[1],%s=", ARG (0), op1, op1);
 			break;
 		case PPC_INS_STH:
 			op->type = R_ANAL_OP_TYPE_STORE;
@@ -732,7 +773,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 			break;
 		case PPC_INS_STHU:
 			op->type = R_ANAL_OP_TYPE_STORE;
-			esilprintf (op, "%s,%s,2,%s,+=", ARG (0), ARG2 (1, "=[2]"), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,%s,=[2],%s=", ARG (0), op1, op1);
 			break;
 		case PPC_INS_STD:
 			op->type = R_ANAL_OP_TYPE_STORE;
@@ -740,7 +785,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 			break;
 		case PPC_INS_STDU:
 			op->type = R_ANAL_OP_TYPE_STORE;
-			esilprintf (op, "%s,%s,8,%s,+=", ARG (0), ARG2 (1, "=[8]"), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,%s,=[8],%s=", ARG (0), op1, op1);
 			break;
 		case PPC_INS_LBZ:
 #if CS_API_MAJOR >= 4
@@ -749,7 +798,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		case PPC_INS_LBZU:
 		case PPC_INS_LBZUX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
-			esilprintf (op, "%s,%s,=,1,%s,+=", ARG2 (1, "[1]"), ARG (0), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,[1],%s,=,%s=", op1, ARG (0), op1);
 			break;
 		case PPC_INS_LBZX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
@@ -763,7 +816,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		case PPC_INS_LDU:
 		case PPC_INS_LDUX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
-			esilprintf (op, "%s,%s,=,8,%s,+=", ARG2 (1, "[8]"), ARG (0), REG2(1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,[8],%s,=,%s=", op1, ARG (0), op1);
 			break;
 		case PPC_INS_LDX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
@@ -792,7 +849,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		case PPC_INS_LHZ:
 		case PPC_INS_LHZU:
 			op->type = R_ANAL_OP_TYPE_LOAD;
-			esilprintf (op, "%s,%s,=", ARG2 (1, "[2]"), ARG (0));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,[2],%s,=,%s=", op1, ARG (0), op1);
 			break;
 		case PPC_INS_LHBRX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
@@ -812,7 +873,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		case PPC_INS_LWZU:
 		case PPC_INS_LWZUX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
-			esilprintf (op, "%s,%s,=,4,%s,+=", ARG2 (1, "[4]"), ARG (0), REG2 (1));
+			op1 = shrink(ARG(1));
+			if (!op1) {
+				break;
+			}
+			esilprintf (op, "%s,[4],%s,=,%s=", op1, ARG (0), op1);
 			break;
 		case PPC_INS_LWBRX:
 			op->type = R_ANAL_OP_TYPE_LOAD;
@@ -881,6 +946,48 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 			op->type = R_ANAL_OP_TYPE_CALL;
 			esilprintf (op, "pc,lr,=,ctr,pc,=");
 			break;
+#if CS_VERSION_MAJOR >= 5
+		case PPC_INS_BNE:
+		case PPC_INS_BNEA:
+		case PPC_INS_BNECTR:
+		case PPC_INS_BNECTRL:
+		case PPC_INS_BNEL:
+		case PPC_INS_BNELA:
+		case PPC_INS_BNELR:
+		case PPC_INS_BNELRL:
+		case PPC_INS_BNG:
+		case PPC_INS_BNGA:
+		case PPC_INS_BNGCTR:
+		case PPC_INS_BNGCTRL:
+		case PPC_INS_BNGL:
+		case PPC_INS_BNGLA:
+		case PPC_INS_BNGLR:
+		case PPC_INS_BNGLRL:
+		case PPC_INS_BNL:
+		case PPC_INS_BNLA:
+		case PPC_INS_BNLCTR:
+		case PPC_INS_BNLCTRL:
+		case PPC_INS_BNLL:
+		case PPC_INS_BNLLA:
+		case PPC_INS_BNLLR:
+		case PPC_INS_BNLLRL:
+		case PPC_INS_BNS:
+		case PPC_INS_BNSA:
+		case PPC_INS_BNSCTR:
+		case PPC_INS_BNSCTRL:
+		case PPC_INS_BNSL:
+		case PPC_INS_BNSLA:
+		case PPC_INS_BNSLR:
+		case PPC_INS_BNSLRL:
+		case PPC_INS_BNU:
+		case PPC_INS_BNUA:
+		case PPC_INS_BNUCTR:
+		case PPC_INS_BNUCTRL:
+		case PPC_INS_BNUL:
+		case PPC_INS_BNULA:
+		case PPC_INS_BNULR:
+		case PPC_INS_BNULRL:
+#endif
 		case PPC_INS_B:
 		case PPC_INS_BC:
 		case PPC_INS_BA:
@@ -1212,7 +1319,9 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		if (mask & R_ANAL_OP_MASK_VAL) {
 			op_fillval (op, handle, insn);
 		}
-		r_strbuf_fini (&op->esil);
+		if (!(mask & R_ANAL_OP_MASK_ESIL)) {
+			r_strbuf_fini (&op->esil);
+		}
 		cs_free (insn, n);
 		//cs_close (&handle);
 	}
@@ -1226,6 +1335,13 @@ static int archinfo(RAnal *a, int q) {
 	return 4;
 }
 
+static RList *anal_preludes(RAnal *anal) {
+#define KW(d,ds,m,ms) r_list_append (l, r_search_keyword_new((const ut8*)d,ds,(const ut8*)m, ms, NULL))
+	RList *l = r_list_newf ((RListFree)r_search_keyword_free);
+	KW ("\x7c\x08\x02\xa6", 4, NULL, 0);
+	return l;
+}
+
 RAnalPlugin r_anal_plugin_ppc_cs = {
 	.name = "ppc",
 	.desc = "Capstone PowerPC analysis",
@@ -1234,6 +1350,7 @@ RAnalPlugin r_anal_plugin_ppc_cs = {
 	.arch = "ppc",
 	.bits = 32 | 64,
 	.archinfo = archinfo,
+	.preludes = anal_preludes,
 	.op = &analop,
 	.set_reg_profile = &set_reg_profile,
 };

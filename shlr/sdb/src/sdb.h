@@ -28,6 +28,13 @@ extern "C" {
 #define SZT_ADD_OVFCHK(x, y) ((SIZE_MAX - (x)) <= (y))
 #endif
 
+	/* printf format check attributes */
+#if defined(__clang__) || defined(__GNUC__)
+#define SDB_PRINTF_CHECK(fmt, dots) __attribute__ ((format (printf, fmt, dots)))
+#else
+#define SDB_PRINTF_CHECK(fmt, dots)
+#endif
+
 #if __SDB_WINDOWS__ && !__CYGWIN__
 #include <windows.h>
 #include <fcntl.h>
@@ -74,6 +81,11 @@ extern char *strdup (const char *);
 #define SDB_KSZ 0xff
 #define SDB_VSZ 0xffffff
 
+typedef struct sdb_gperf_t {
+	const char *name;
+	const char *(*get)(const char *k);
+	unsigned int *(*hash)(const char *k);
+} SdbGperf;
 
 typedef struct sdb_t {
 	char *dir; // path+name
@@ -88,6 +100,7 @@ typedef struct sdb_t {
 	HtPP *ht;
 	ut32 eod;
 	ut32 pos;
+	SdbGperf *gp;
 	int fdump;
 	char *ndump;
 	ut64 expire;
@@ -112,6 +125,7 @@ SDB_API Sdb* sdb_new0(void);
 SDB_API Sdb* sdb_new(const char *path, const char *file, int lock);
 
 SDB_API int sdb_open(Sdb *s, const char *file);
+SDB_API int sdb_open_gperf(Sdb *s, SdbGperf *g);
 SDB_API void sdb_close(Sdb *s);
 
 SDB_API void sdb_config(Sdb *s, int options);
@@ -122,10 +136,14 @@ SDB_API int sdb_count(Sdb* s);
 SDB_API void sdb_reset(Sdb* s);
 SDB_API void sdb_setup(Sdb* s, int options);
 SDB_API void sdb_drain(Sdb*, Sdb*);
+
+// Copy everything, including namespaces, from src to dst
+SDB_API void sdb_copy(Sdb *src, Sdb *dst);
+
 SDB_API bool sdb_stats(Sdb *s, ut32 *disk, ut32 *mem);
 SDB_API bool sdb_dump_hasnext (Sdb* s);
 
-typedef int (*SdbForeachCallback)(void *user, const char *k, const char *v);
+typedef bool (*SdbForeachCallback)(void *user, const char *k, const char *v);
 SDB_API bool sdb_foreach(Sdb* s, SdbForeachCallback cb, void *user);
 SDB_API SdbList *sdb_foreach_list(Sdb* s, bool sorted);
 SDB_API SdbList *sdb_foreach_list_filter(Sdb* s, SdbForeachCallback filter, bool sorted);
@@ -142,6 +160,23 @@ SDB_API bool sdb_remove(Sdb*, const char *key, ut32 cas);
 SDB_API int sdb_unset(Sdb*, const char *key, ut32 cas);
 SDB_API int sdb_unset_like(Sdb *s, const char *k);
 SDB_API char** sdb_like(Sdb *s, const char *k, const char *v, SdbForeachCallback cb);
+
+// diffing
+typedef struct sdb_diff_t {
+	const SdbList *path;
+	const char *k;
+	const char *v; // if null, k is a namespace
+	bool add;
+} SdbDiff;
+
+// Format diff in a readable form into str. str, size and return are like in snprintf.
+SDB_API int sdb_diff_format(char *str, int size, const SdbDiff *diff);
+
+typedef void (*SdbDiffCallback)(const SdbDiff *diff, void *user);
+
+// Returns true iff the contents of a and b are equal including contained namespaces
+// If cb is non-null, it will be called subsequently with differences. 
+SDB_API bool sdb_diff(Sdb *a, Sdb *b, SdbDiffCallback cb, void *cb_user);
 
 // Gets a pointer to the value associated with `key`.
 SDB_API char *sdb_get(Sdb*, const char *key, ut32 *cas);
@@ -181,9 +216,16 @@ SDB_API void* sdb_ptr_get(Sdb *db, const char *key, ut32 *cas);
 
 /* create db */
 SDB_API bool sdb_disk_create(Sdb* s);
-SDB_API int sdb_disk_insert(Sdb* s, const char *key, const char *val);
+SDB_API bool sdb_disk_insert(Sdb* s, const char *key, const char *val);
 SDB_API bool sdb_disk_finish(Sdb* s);
 SDB_API bool sdb_disk_unlink(Sdb* s);
+
+/* plaintext sdb files */
+SDB_API bool sdb_text_save_fd(Sdb *s, int fd, bool sort);
+SDB_API bool sdb_text_save(Sdb *s, const char *file, bool sort);
+SDB_API bool sdb_text_load_buf(Sdb *s, char *buf, size_t sz);
+SDB_API bool sdb_text_load(Sdb *s, const char *file);
+SDB_API bool sdb_text_check(Sdb *s, const char *file);
 
 /* iterate */
 SDB_API void sdb_dump_begin(Sdb* s);
@@ -207,7 +249,7 @@ SDB_API const char *sdb_itoca(ut64 n);
 SDB_API bool sdb_lock(const char *s);
 SDB_API const char *sdb_lock_file(const char *f);
 SDB_API void sdb_unlock(const char *s);
-SDB_API int sdb_unlink(Sdb* s);
+SDB_API bool sdb_unlink(Sdb* s);
 SDB_API int sdb_lock_wait(const char *s UNUSED);
 
 /* expiration */
@@ -342,7 +384,7 @@ SDB_API void sdb_encode_raw(char *bout, const ut8 *bin, int len);
 SDB_API int sdb_decode_raw(ut8 *bout, const char *bin, int len);
 
 // binfmt
-SDB_API char *sdb_fmt(const char *fmt, ...);
+SDB_API char *sdb_fmt(const char *fmt, ...) SDB_PRINTF_CHECK(1, 2);
 SDB_API int sdb_fmt_init(void *p, const char *fmt);
 SDB_API void sdb_fmt_free(void *p, const char *fmt);
 SDB_API int sdb_fmt_tobin(const char *_str, const char *fmt, void *stru);

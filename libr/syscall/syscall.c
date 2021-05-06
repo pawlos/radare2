@@ -1,11 +1,10 @@
-/* radare - Copyright 2008-2018 - LGPL -- pancake */
+/* radare - Copyright 2008-2020 - LGPL -- pancake */
 
 #include <r_types.h>
 #include <r_util.h>
 #include <r_syscall.h>
 #include <stdio.h>
 #include <string.h>
-#include "fastcall.h"
 
 R_LIB_VERSION (r_syscall);
 
@@ -18,11 +17,10 @@ R_API RSyscall* r_syscall_ref(RSyscall *sc) {
 	return sc;
 }
 
-R_API RSyscall* r_syscall_new() {
+R_API RSyscall* r_syscall_new(void) {
 	RSyscall *rs = R_NEW0 (RSyscall);
 	if (rs) {
 		rs->sysport = sysport_x86;
-		rs->regs = fastcall_x86_32;
 		rs->srdb = sdb_new0 (); // sysregs database
 		rs->db = sdb_new0 ();
 	}
@@ -44,14 +42,6 @@ R_API void r_syscall_free(RSyscall *s) {
 	}
 }
 
-/* return fastcall register argument 'idx' for a syscall with 'num' args */
-R_API const char *r_syscall_reg(RSyscall *s, int idx, int num) {
-	if (num < 0 || num >= R_SYSCALL_ARGS || idx < 0 || idx >= R_SYSCALL_ARGS) {
-		return NULL;
-	}
-	return s->regs[num].arg[idx];
-}
-
 static Sdb *openDatabase(Sdb *db, const char *name) {
 	char *file = r_str_newf ( R_JOIN_3_PATHS ("%s", R2_SDB, "%s.sdb"),
 		r_sys_prefix (NULL), name);
@@ -62,6 +52,9 @@ static Sdb *openDatabase(Sdb *db, const char *name) {
 		} else {
 			db = sdb_new (0, file, 0);
 		}
+	} else {
+		sdb_free (db);
+		db = sdb_new0 ();
 	}
 	free (file);
 	return db;
@@ -117,38 +110,12 @@ R_API bool r_syscall_setup(RSyscall *s, const char *arch, int bits, const char *
 	if (!strcmp (os, "any")) { // ignored
 		return true;
 	}
-	if (!strcmp (arch, "mips")) {
-		s->regs = fastcall_mips;
-	} else if (!strcmp (arch, "avr")) {
+	if (!strcmp (arch, "avr")) {
 		s->sysport = sysport_avr;
 	} else if (!strcmp (os, "darwin") || !strcmp (os, "osx") || !strcmp (os, "macos")) {
 		os = "darwin";
-		s->regs = fastcall_x86_64;
-	} else if (!strcmp (arch,"sh")) {
-		s->regs = fastcall_sh;
-	} else if (!strcmp (arch, "arm")) {
-		switch (bits) {
-		case 16:
-		case 32:
-			s->regs = fastcall_arm;
-			break;
-		case 64:
-			s->regs = fastcall_arm64;
-			break;
-		}
 	} else if (!strcmp (arch, "x86")) {
 		s->sysport = sysport_x86;
-		switch (bits) {
-		case 8:
-			s->regs = fastcall_x86_8;
-			break;
-		case 32:
-			s->regs = fastcall_x86_32;
-			break;
-		case 64:
-			s->regs = fastcall_x86_64;
-			break;
-		}
 	}
 
 	if (syscall_changed) {
@@ -276,12 +243,12 @@ R_API const char *r_syscall_get_i(RSyscall *s, int num, int swi) {
 	return sdb_const_get (s->db, foo, 0);
 }
 
-static int callback_list(void *u, const char *k, const char *v) {
+static bool callback_list(void *u, const char *k, const char *v) {
 	RList *list = (RList*)u;
 	if (!strchr (k, '.')) {
 		RSyscallItem *si = r_syscall_item_new_from_string (k, v);
 		if (!si) {
-			return 1;
+			return true;
 		}
 		if (!strchr (si->name, '.')) {
 			r_list_append (list, si);
@@ -289,7 +256,7 @@ static int callback_list(void *u, const char *k, const char *v) {
 			r_syscall_item_free (si);
 		}
 	}
-	return 1; // continue loop
+	return true; // continue loop
 }
 
 R_API RList *r_syscall_list(RSyscall *s) {

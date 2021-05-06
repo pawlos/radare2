@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2019 - nibble, pancake, maijin */
+/* radare2 - LGPL - Copyright 2009-2020 - nibble, pancake, maijin */
 
 #include <stdio.h>
 
@@ -25,8 +25,8 @@ R_API RParse *r_parse_new(void) {
 	p->notin_flagspace = NULL;
 	p->flagspace = NULL;
 	p->pseudo = false;
-	p->relsub = false;
-	p->tailsub = false;
+	p->subrel = false;
+	p->subtail = false;
 	p->minval = 0x100;
 	p->localvar_only = false;
 	for (i = 0; parse_static_plugins[i]; i++) {
@@ -100,15 +100,12 @@ R_API bool r_parse_assemble(RParse *p, char *data, char *str) {
 // TODO: refactooring, this should return char * instead
 R_API bool r_parse_parse(RParse *p, const char *data, char *str) {
 	r_return_val_if_fail (p && data && str, false);
-	if (p && data && *data && p->cur && p->cur->parse) {
-		return p->cur->parse (p, data, str);
-	}
-	return false;
+	return (p && data && *data && p->cur && p->cur->parse)
+		? p->cur->parse (p, data, str) : false;
 }
 
-
 R_API char *r_parse_immtrim(char *opstr) {
-	if (!opstr || !*opstr) {
+	if (R_STR_ISEMPTY (opstr)) {
 		return NULL;
 	}
 	char *n = strstr (opstr, "0x");
@@ -137,9 +134,9 @@ R_API char *r_parse_immtrim(char *opstr) {
 	return opstr;
 }
 
-R_API bool r_parse_varsub(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
-	if (p->cur && p->cur->varsub) {
-		return p->cur->varsub (p, f, addr, oplen, data, str, len);
+R_API bool r_parse_subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
+	if (p->cur && p->cur->subvar) {
+		return p->cur->subvar (p, f, addr, oplen, data, str, len);
 	}
 	return false;
 }

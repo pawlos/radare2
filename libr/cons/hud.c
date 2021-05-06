@@ -19,6 +19,10 @@ R_API char *r_cons_hud_file(const char *f) {
 // Display a buffer in the hud (splitting it line-by-line and ignoring
 // the lines starting with # )
 R_API char *r_cons_hud_string(const char *s) {
+	if (!r_cons_is_interactive ()) {
+		eprintf ("Hud mode requires scr.interactive=true.\n");
+		return NULL;
+	}
 	char *os, *track, *ret, *o = strdup (s);
 	if (!o) {
 		return NULL;
@@ -59,6 +63,10 @@ R_API char *r_cons_hud_string(const char *s) {
 static bool __matchString(char *entry, char *filter, char *mask, const int mask_size) {
 	char *p, *current_token = filter;
 	const char *filter_end = filter + strlen (filter);
+	char *ansi_filtered = strdup (entry);
+	int *cps;
+	r_str_ansi_filter (ansi_filtered, NULL, &cps, -1);
+	entry = ansi_filtered;
 	// first we separate the filter in words (include the terminator char
 	// to avoid special handling of the last token)
 	for (p = filter; p <= filter_end; p++) {
@@ -76,22 +84,27 @@ static bool __matchString(char *entry, char *filter, char *mask, const int mask_
 			token_len = strlen (current_token);
 			// look for all matches of the current_token in this entry
 			while ((next_match = r_str_casestr (entry_ptr, current_token))) {
-				int i;
-				for (i = next_match - entry;
-				     (i < next_match - entry + token_len) && i < mask_size;
-				     i++) {
-					mask[i] = 'x';
+				int real_pos, filtered_pos = next_match - entry;
+				int end_pos = cps[filtered_pos + token_len];
+				for (real_pos = cps[filtered_pos];
+					real_pos < end_pos && real_pos < mask_size;
+					real_pos = cps[++filtered_pos]) {
+					mask[real_pos] = 'x';
 				}
 				entry_ptr += token_len;
 			}
 			*p = old_char;
 			if (entry_ptr == entry) {
 				// the word is not present in the target
+				free (cps);
+				free (ansi_filtered);
 				return false;
 			}
 			current_token = p + 1;
 		}
 	}
+	free (cps);
+	free (ansi_filtered);
 	return true;
 }
 
@@ -188,7 +201,7 @@ static void mht_free_kv(HtPPKv *kv) {
 
 #define HUD_CACHE 0
 R_API char *r_cons_hud(RList *list, const char *prompt) {
-	char user_input[HUD_BUF_SIZE], hud_prompt[HUD_BUF_SIZE + 1];
+	char user_input[HUD_BUF_SIZE + 1];
 	char *selected_entry = NULL;
 	RListIter *iter;
 
@@ -198,8 +211,8 @@ R_API char *r_cons_hud(RList *list, const char *prompt) {
 	hud->vi = 0;
 	I(line)->echo = false;
 	I(line)->hud = hud;
-	hud_prompt [0] = 0;
 	user_input [0] = 0;
+	user_input[HUD_BUF_SIZE] = 0;
 	hud->top_entry_n = 0;
 	r_cons_show_cursor (false);
 	r_cons_enable_mouse (false);
@@ -209,7 +222,7 @@ R_API char *r_cons_hud(RList *list, const char *prompt) {
 	for (;;) {
 		r_cons_gotoxy (0, 0);
 		hud->current_entry_n = 0;
-		
+
 		if (hud->top_entry_n < 0) {
 			hud->top_entry_n = 0;
 		}
@@ -217,7 +230,7 @@ R_API char *r_cons_hud(RList *list, const char *prompt) {
 		if (prompt && *prompt) {
 			r_cons_printf (">> %s\n", prompt);
 		}
-		r_cons_printf ("%d> %s\n", hud->top_entry_n, hud_prompt);
+		r_cons_printf ("%d> %s|\n", hud->top_entry_n, user_input);
 		char *row;
 		RList *filtered_list = NULL;
 
@@ -241,15 +254,8 @@ R_API char *r_cons_hud(RList *list, const char *prompt) {
 #endif
 		r_cons_visual_flush ();
 		(void) r_line_readline ();
-		memset (user_input, 0, HUD_BUF_SIZE);
-		memset (hud_prompt, 0, HUD_BUF_SIZE + 1);
-		strcpy (user_input, I(line)->buffer.data); 				// to search
-		strcpy (hud_prompt, user_input); 					// to display
-		int i;
-		for (i = I(line)->buffer.length; i > I(line)->buffer.index; i--) {
-			hud_prompt[i] = hud_prompt[i - 1];
-		}
-		memcpy (hud_prompt + I(line)->buffer.index, "|", 1);
+		r_str_ncpy (user_input, I(line)->buffer.data, HUD_BUF_SIZE);
+
 		if (!hud->activate) {
 			hud->top_entry_n = 0;
 			if (hud->current_entry_n >= 1 ) {
@@ -260,7 +266,7 @@ R_API char *r_cons_hud(RList *list, const char *prompt) {
 					r_cons_show_cursor (true);
 					r_cons_set_raw (false);
 					return strdup (selected_entry);
-				} 
+				}
 			} else {
 				goto _beach;
 			}
@@ -281,8 +287,8 @@ R_API char *r_cons_hud_path(const char *path, int dir) {
 	char *tmp, *ret = NULL;
 	RList *files;
 	if (path) {
-		path = r_str_trim_ro (path);
-		tmp = strdup (*path? path: "./");
+		path = r_str_trim_head_ro (path);
+		tmp = strdup (*path ? path : "./");
 	} else {
 		tmp = strdup ("./");
 	}

@@ -10,7 +10,6 @@
 extern "C" {
 #endif
 
-// TODO: rename to r_flag_XXX api
 R_LIB_VERSION_HEADER(r_flag);
 
 #define R_FLAG_NAME_SIZE 512
@@ -55,21 +54,19 @@ typedef struct r_flag_t {
 	Sdb *tags;
 	RNum *num;
 	RSkipList *by_off; /* flags sorted by offset, value=RFlagsAtOffset */
-	HtPP *ht_name; /* hashmap key=item name, value=RList of items */
+	HtPP *ht_name; /* hashmap key=item name, value=RFlagItem * */
 	PrintfCallback cb_printf;
-#if R_FLAG_ZONE_USE_SDB
-	Sdb *zones;
-#else
 	RList *zones;
-#endif
+	ut64 mask;
 } RFlag;
 
 /* compile time dependency */
 
 typedef bool (*RFlagExistAt)(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64 off);
 typedef RFlagItem* (*RFlagGet)(RFlag *f, const char *name);
-typedef RFlagItem *(*RFlagGetAtAddr) (RFlag *f, ut64);
+typedef RFlagItem* (*RFlagGetAtAddr) (RFlag *f, ut64);
 typedef RFlagItem* (*RFlagGetAt)(RFlag *f, ut64 addr, bool closest);
+typedef const RList* (*RFlagGetList)(RFlag *f, ut64 addr);
 typedef RFlagItem* (*RFlagSet)(RFlag *f, const char *name, ut64 addr, ut32 size);
 typedef bool (*RFlagUnset)(RFlag *f, RFlagItem *item);
 typedef bool (*RFlagUnsetName)(RFlag *f, const char *name);
@@ -86,6 +83,7 @@ typedef struct r_flag_bind_t {
 	RFlagExistAt exist_at;
 	RFlagGet get;
 	RFlagGetAt get_at;
+	RFlagGetList get_list;
 	RFlagSet set;
 	RFlagUnset unset;
 	RFlagUnsetName unset_name;
@@ -120,12 +118,12 @@ R_API void r_flag_item_set_alias(RFlagItem *item, const char *alias);
 R_API void r_flag_item_free (RFlagItem *item);
 R_API void r_flag_item_set_comment(RFlagItem *item, const char *comment);
 R_API void r_flag_item_set_realname(RFlagItem *item, const char *realname);
+R_API const char *r_flag_item_set_color(RFlagItem *item, const char *color);
 R_API RFlagItem *r_flag_item_clone(RFlagItem *item);
 R_API int r_flag_unset_glob(RFlag *f, const char *name);
 R_API int r_flag_rename(RFlag *f, RFlagItem *item, const char *name);
 R_API int r_flag_relocate(RFlag *f, ut64 off, ut64 off_mask, ut64 to);
 R_API bool r_flag_move (RFlag *f, ut64 at, ut64 to);
-R_API const char *r_flag_color(RFlag *f, RFlagItem *it, const char *color);
 R_API int r_flag_count(RFlag *f, const char *glob);
 R_API void r_flag_foreach(RFlag *f, RFlagItemCb cb, void *user);
 R_API void r_flag_foreach_prefix(RFlag *f, const char *pfx, int pfx_len, RFlagItemCb cb, void *user);

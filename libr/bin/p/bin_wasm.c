@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2017-2019 - pancake, cgvwzq */
+/* radare2 - LGPL - Copyright 2017-2021 - pancake, cgvwzq */
 
 // http://webassembly.org/docs/binary-encoding/#module-structure
 
@@ -8,21 +8,22 @@
 #include <r_bin.h>
 
 #include "wasm/wasm.h"
+#include "../format/wasm/wasm.h"
 
-static bool check_buffer (RBuffer *rbuf) {
+static bool check_buffer(RBuffer *rbuf) {
 	ut8 buf[4] = { 0 };
 	return rbuf && r_buf_read_at (rbuf, 0, buf, 4) == 4 && !memcmp (buf, R_BIN_WASM_MAGIC_BYTES, 4);
 }
 
-static bool find_export (const ut32 *p, const RBinWasmExportEntry *q) {
+static bool find_export(const ut32 *p, const RBinWasmExportEntry *q) {
 	if (q->kind != R_BIN_WASM_EXTERNALKIND_Function) {
 		return true;
 	}
-	return q->index != (*p);
+	return q->index != *p;
 }
 
-static bool load_buffer (RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (bf && buf && r_buf_size (buf) != UT64_MAX, NULL);
+static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+	r_return_val_if_fail (bf && buf && r_buf_size (buf) != UT64_MAX, false);
 
 	if (check_buffer (buf)) {
 		*bin_obj = r_bin_wasm_init (bf, buf);
@@ -31,32 +32,31 @@ static bool load_buffer (RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadad
 	return false;
 }
 
-static void destroy (RBinFile *bf) {
+static void destroy(RBinFile *bf) {
 	r_bin_wasm_destroy (bf);
 }
 
-static ut64 baddr (RBinFile *bf) {
+static ut64 baddr(RBinFile *bf) {
 	return 0;
 }
 
-static RBinAddr *binsym (RBinFile *bf, int type) {
+static RBinAddr *binsym(RBinFile *bf, int type) {
 	return NULL; // TODO
 }
 
-static RList *sections (RBinFile *bf);
+static RList *sections(RBinFile *bf);
 
-static RList *entries (RBinFile *bf) {
+static RList *entries(RBinFile *bf) {
 	RBinWasmObj *bin = bf && bf->o ? bf->o->bin_obj : NULL;
 	// TODO
 	RList *ret = NULL;
 	RBinAddr *ptr = NULL;
-	ut64 addr = 0x0;
 
 	if (!(ret = r_list_newf ((RListFree)free))) {
 		return NULL;
 	}
 
-	addr = (ut64)r_bin_wasm_get_entrypoint (bin);
+	ut64 addr = (ut64)r_bin_wasm_get_entrypoint (bin);
 	if (!addr) {
 		RList *codes = r_bin_wasm_get_codes (bin);
 		if (codes) {
@@ -117,15 +117,14 @@ static RList *sections (RBinFile *bf) {
 	return ret;
 }
 
-static RList *symbols (RBinFile *bf) {
-	RBinWasmObj *bin = NULL;
+static RList *symbols(RBinFile *bf) {
 	RList *ret = NULL, *codes = NULL, *imports = NULL, *exports = NULL;
 	RBinSymbol *ptr = NULL;
 
 	if (!bf || !bf->o || !bf->o->bin_obj) {
 		return NULL;
 	}
-	bin = bf->o->bin_obj;
+	RBinWasmObj *bin = bf->o->bin_obj;
 	if (!(ret = r_list_newf ((RListFree)free))) {
 		return NULL;
 	}
@@ -151,24 +150,26 @@ static RList *symbols (RBinFile *bf) {
 		if (!(ptr = R_NEW0 (RBinSymbol))) {
 			goto bad_alloc;
 		}
-		ptr->name = r_str_newf ("imp.%s.%s", imp->module_str, imp->field_str);
-		ptr->forwarder = r_str_const ("NONE");
-		ptr->bind = r_str_const ("NONE");
+		ptr->name = strdup (imp->field_str);
+		ptr->libname = strdup (imp->module_str);
+		ptr->is_imported = true;
+		ptr->forwarder = "NONE";
+		ptr->bind = "NONE";
 		switch (imp->kind) {
 		case R_BIN_WASM_EXTERNALKIND_Function:
-			ptr->type = r_str_const (R_BIN_TYPE_FUNC_STR);
+			ptr->type = R_BIN_TYPE_FUNC_STR;
 			fcn_idx++;
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Table:
-			ptr->type = r_str_const ("TABLE");
+			ptr->type = "TABLE";
 			table_idx++;
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Memory:
-			ptr->type = r_str_const ("MEMORY");
+			ptr->type = "MEMORY";
 			mem_idx++;
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Global:
-			ptr->type = r_str_const (R_BIN_BIND_GLOBAL_STR);
+			ptr->type = R_BIN_BIND_GLOBAL_STR;
 			global_idx++;
 			break;
 		}
@@ -182,12 +183,10 @@ static RList *symbols (RBinFile *bf) {
 
 	RListIter *is_exp = NULL;
 	RBinWasmCodeEntry *func;
-	// RBinWasmExportEntry *export = NULL;
 	r_list_foreach (codes, iter, func) {
 		if (!(ptr = R_NEW0 (RBinSymbol))) {
 			goto bad_alloc;
 		}
-
 		const char *fcn_name = r_bin_wasm_get_function_name (bin, fcn_idx);
 		if (fcn_name) {
 			ptr->name = strdup (fcn_name);
@@ -201,11 +200,11 @@ static RList *symbols (RBinFile *bf) {
 			ptr->name = r_str_newf ("fcn.%d", fcn_idx);
 		}
 
-		ptr->forwarder = r_str_const ("NONE");
+		ptr->forwarder = "NONE";
 		if (!ptr->bind) {
-			ptr->bind = r_str_const ("NONE");
+			ptr->bind = "NONE";
 		}
-		ptr->type = r_str_const (R_BIN_TYPE_FUNC_STR);
+		ptr->type = R_BIN_TYPE_FUNC_STR;
 		ptr->size = func->len;
 		ptr->vaddr = (ut64)func->code;
 		ptr->paddr = (ut64)func->code;
@@ -235,7 +234,7 @@ static RList *imports (RBinFile *bf) {
 		return NULL;
 	}
 	bin = bf->o->bin_obj;
-	if (!(ret = r_list_newf (r_bin_import_free))) {
+	if (!(ret = r_list_newf ((RListFree)r_bin_import_free))) {
 		return NULL;
 	}
 	if (!(imports = r_bin_wasm_get_imports (bin))) {
@@ -252,19 +251,19 @@ static RList *imports (RBinFile *bf) {
 		ptr->name = strdup (import->field_str);
 		ptr->classname = strdup (import->module_str);
 		ptr->ordinal = i;
-		ptr->bind = r_str_const ("NONE");
+		ptr->bind = "NONE";
 		switch (import->kind) {
 		case R_BIN_WASM_EXTERNALKIND_Function:
-			ptr->type = r_str_const ("FUNC");
+			ptr->type = "FUNC";
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Table:
-			ptr->type = r_str_const ("TABLE");
+			ptr->type = "TABLE";
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Memory:
-			ptr->type = r_str_const ("MEM");
+			ptr->type = "MEM";
 			break;
 		case R_BIN_WASM_EXTERNALKIND_Global:
-			ptr->type = r_str_const ("GLOBAL");
+			ptr->type = "GLOBAL";
 			break;
 		}
 		r_list_append (ret, ptr);
@@ -313,11 +312,41 @@ static RBuffer *create (RBin *bin, const ut8 *code, int codelen, const ut8 *data
 	RBuffer *buf = r_buf_new ();
 #define B(x, y) r_buf_append_bytes (buf, (const ut8 *)(x), y)
 #define D(x) r_buf_append_ut32 (buf, x)
-	B ("\x00"
-	   "asm",
-		4);
+	B ("\x00" "asm", 4);
 	B ("\x01\x00\x00\x00", 4);
 	return buf;
+}
+
+static int get_fcn_offset_from_id(RBinFile *bf, int fcn_idx) {
+	RBinWasmObj *bin = bf->o->bin_obj;
+	RList *codes = r_bin_wasm_get_codes (bin);
+	if (codes) {
+		RBinWasmCodeEntry *func = r_list_get_n (codes, fcn_idx);
+		if (func) {
+			return func->code;
+		}
+	}
+	return -1;
+}
+
+static int getoffset(RBinFile *bf, int type, int idx) {
+	switch (type) {
+	case 'f': // fcnid -> fcnaddr
+		return get_fcn_offset_from_id (bf, idx);
+	}
+	return -1;
+}
+
+static const char *getname(RBinFile *bf, int type, int idx, bool sd) {
+	RBinWasmObj *bin = bf->o->bin_obj;
+        switch (type) {
+        case 'f': // fcnidx
+		{
+			const char *r = r_bin_wasm_get_function_name (bin, idx);
+			return r? strdup (r): NULL;
+		}
+	}
+	return NULL;
 }
 
 RBinPlugin r_bin_plugin_wasm = {
@@ -336,6 +365,8 @@ RBinPlugin r_bin_plugin_wasm = {
 	.imports = &imports,
 	.info = &info,
 	.libs = &libs,
+	.get_offset = &getoffset,
+	.get_name = &getname,
 	.create = &create,
 };
 

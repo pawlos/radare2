@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2019 - mrmacete */
+/* radare2 - LGPL - Copyright 2019-2021 - mrmacete */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -120,6 +120,9 @@ typedef struct _RKmodInfo {
 #define K_PPTR(p) p_ptr (p, obj)
 #define K_RPTR(buf) r_ptr (buf, obj)
 
+#define IS_PTR_AUTH(x) ((x & (1ULL << 63)) != 0)
+#define IS_PTR_BIND(x) ((x & (1ULL << 62)) != 0)
+
 static ut64 p_ptr (ut64 decorated_addr, RKernelCacheObj *obj);
 static ut64 r_ptr (ut8 *buf, RKernelCacheObj *obj);
 
@@ -132,11 +135,13 @@ static void swizzle_io_read(RKernelCacheObj *obj, RIO *io);
 static int kernelcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count);
 static bool r_parse_pointer(RParsedPointer *ptr, ut64 decorated_addr, RKernelCacheObj *obj);
 static bool on_rebase_pointer (ut64 offset, ut64 decorated_addr, RRebaseCtx *ctx);
-static void rebase_buffer(RKernelCacheObj *obj, RIO *io, RIODesc *fd, ut8 *buf, int count);
+static void rebase_buffer(RKernelCacheObj *obj, ut64 off, RIODesc *fd, ut8 *buf, int count);
+static void rebase_buffer_fixup(RKernelCacheObj *kobj, ut64 off, RIODesc *fd, ut8 *buf, int count);
 
 static RPrelinkRange *get_prelink_info_range_from_mach0(struct MACH0_(obj_t) *mach0);
 static RList *filter_kexts(RKernelCacheObj *obj);
 static RList *carve_kexts(RKernelCacheObj *obj);
+static RList *kexts_from_load_commands(RKernelCacheObj *obj);
 
 static void sections_from_mach0(RList *ret, struct MACH0_(obj_t) *mach0, RBinFile *bf, ut64 paddr, char *prefix, RKernelCacheObj *obj);
 static void handle_data_sections(RBinSection *sect);
@@ -151,6 +156,7 @@ static void r_kext_free(RKext *kext);
 static void r_kext_fill_text_range(RKext *kext);
 static int kexts_sort_vaddr_func(const void *a, const void *b);
 static struct MACH0_(obj_t) *create_kext_mach0(RKernelCacheObj *obj, RKext *kext);
+static struct MACH0_(obj_t) *create_kext_shared_mach0(RKernelCacheObj *obj, RKext *kext);
 
 #define r_kext_index_foreach(index, i, item)\
 	if (index)\
@@ -180,27 +186,34 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadadd
 	}
 
 	RRebaseInfo *rebase_info = r_rebase_info_new_from_mach0 (fbuf, main_mach0);
+	RKernelCacheObj *obj = NULL;
 
 	RPrelinkRange *prelink_range = get_prelink_info_range_from_mach0 (main_mach0);
 	if (!prelink_range) {
 		goto beach;
 	}
 
-	RKernelCacheObj *obj = R_NEW0 (RKernelCacheObj);
+	obj = R_NEW0 (RKernelCacheObj);
 	if (!obj) {
+		R_FREE (prelink_range);
 		goto beach;
 	}
 
-	RCFValueDict *prelink_info = r_cf_value_dict_parse (fbuf, prelink_range->range.offset,
-		prelink_range->range.size, R_CF_OPTION_SKIP_NSDATA);
-	if (!prelink_info) {
-		R_FREE (obj);
-		goto beach;
+	RCFValueDict *prelink_info = NULL;
+	if (main_mach0->hdr.filetype != MH_FILESET && prelink_range->range.size) {
+		prelink_info = r_cf_value_dict_parse (fbuf, prelink_range->range.offset,
+				prelink_range->range.size, R_CF_OPTION_SKIP_NSDATA);
+		if (!prelink_info) {
+			R_FREE (prelink_range);
+			R_FREE (obj);
+			goto beach;
+		}
 	}
 
 	if (!pending_bin_files) {
 		pending_bin_files = r_list_new ();
 		if (!pending_bin_files) {
+			R_FREE (prelink_range);
 			R_FREE (obj);
 			R_FREE (prelink_info);
 			goto beach;
@@ -214,11 +227,13 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadadd
 	obj->pa2va_exec = prelink_range->pa2va_exec;
 	obj->pa2va_data = prelink_range->pa2va_data;
 
+	R_FREE (prelink_range);
+
 	*bin_obj = obj;
 
 	r_list_push (pending_bin_files, bf);
 
-	if (rebase_info) {
+	if (rebase_info || main_mach0->chained_starts) {
 		RIO *io = bf->rbin->iob.io;
 		swizzle_io_read (obj, io);
 	}
@@ -227,6 +242,7 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadadd
 
 beach:
 	r_buf_free (fbuf);
+	obj->cache_buf = NULL;
 	MACH0_(mach0_free) (main_mach0);
 	return false;
 }
@@ -237,7 +253,20 @@ static void ensure_kexts_initialized(RKernelCacheObj *obj) {
 	}
 	obj->kexts_initialized = true;
 
-	RList *kexts = filter_kexts (obj);
+	RList *kexts = NULL;
+
+	if (obj->prelink_info) {
+		kexts = filter_kexts (obj);
+	}
+
+	if (kexts && !r_list_length (kexts)) {
+		r_list_free (kexts);
+		kexts = NULL;
+	}
+
+	if (!kexts) {
+		kexts = kexts_from_load_commands (obj);
+	}
 
 	if (kexts && !r_list_length (kexts)) {
 		r_list_free (kexts);
@@ -249,6 +278,11 @@ static void ensure_kexts_initialized(RKernelCacheObj *obj) {
 	}
 
 	obj->kexts = r_kext_index_new (kexts);
+
+	if (kexts) {
+		kexts->free = NULL;
+		r_list_free (kexts);
+	}
 }
 
 static RPrelinkRange *get_prelink_info_range_from_mach0(struct MACH0_(obj_t) *mach0) {
@@ -259,6 +293,7 @@ static RPrelinkRange *get_prelink_info_range_from_mach0(struct MACH0_(obj_t) *ma
 
 	RPrelinkRange *prelink_range = R_NEW0 (RPrelinkRange);
 	if (!prelink_range) {
+		R_FREE (sections);
 		return NULL;
 	}
 
@@ -289,6 +324,20 @@ static RPrelinkRange *get_prelink_info_range_from_mach0(struct MACH0_(obj_t) *ma
 	}
 
 	R_FREE (sections);
+
+	if (incomplete == 1 && !prelink_range->pa2va_data) {
+		struct MACH0_(segment_command) *seg;
+		int nsegs = R_MIN (mach0->nsegs, 128);
+		size_t i;
+		for (i = 0; i < nsegs; i++) {
+			seg = &mach0->segs[i];
+			if (!strcmp (seg->segname, "__DATA")) {
+				prelink_range->pa2va_data = seg->vmaddr - seg->fileoff;
+				incomplete--;
+				break;
+			}
+		}
+	}
 
 	if (incomplete) {
 		R_FREE (prelink_range);
@@ -526,6 +575,7 @@ static RList *carve_kexts(RKernelCacheObj *obj) {
 		ut64 text_end = text_start + kext->text_range.size;
 
 		if (text_start == text_end) {
+			r_kext_free (kext);
 			continue;
 		}
 
@@ -553,6 +603,80 @@ static RList *carve_kexts(RKernelCacheObj *obj) {
 beach:
 	r_list_free (kexts);
 	R_FREE (all_infos);
+	return NULL;
+}
+
+static RList *kexts_from_load_commands(RKernelCacheObj *obj) {
+	RList *kexts = r_list_newf ((RListFree) &r_kext_free);
+	if (!kexts) {
+		return NULL;
+	}
+
+	ut32 i, ncmds = r_buf_read_le32_at (obj->cache_buf, 16);
+	ut64 length = r_buf_size (obj->cache_buf);
+
+	ut32 cursor = sizeof (struct MACH0_(mach_header));
+	for (i = 0; i < ncmds && cursor < length; i++) {
+		ut32 cmdtype = r_buf_read_le32_at (obj->cache_buf, cursor);
+		ut32 cmdsize = r_buf_read_le32_at (obj->cache_buf, cursor + 4);
+		if (!cmdsize || cmdsize + cursor < cursor) {
+			break;
+		}
+		if (cmdtype != LC_KEXT) {
+			cursor += cmdsize;
+			continue;
+		}
+
+		ut64 vaddr = r_buf_read_le64_at (obj->cache_buf, cursor + 8);
+		ut64 paddr = r_buf_read_le64_at (obj->cache_buf, cursor + 16);
+		st32 padded_name_length = (st32)cmdsize - 32;
+		if (padded_name_length <= 0 || cmdsize - 32 + cursor >= length) {
+			cursor += cmdsize;
+			continue;
+		}
+
+		char *padded_name = calloc (1, padded_name_length);
+		if (!padded_name) {
+			goto beach;
+		}
+		if (r_buf_read_at (obj->cache_buf, cursor + 32, (ut8 *)padded_name, padded_name_length)
+				!= padded_name_length) {
+			free (padded_name);
+			goto early;
+		}
+
+		RKext *kext = R_NEW0 (RKext);
+		if (!kext) {
+			free (padded_name);
+			goto beach;
+		}
+
+		kext->vaddr = vaddr;
+		kext->range.offset = paddr;
+
+		kext->mach0 = create_kext_shared_mach0 (obj, kext);
+		if (!kext->mach0) {
+			free (padded_name);
+			r_kext_free (kext);
+			cursor += cmdsize;
+			continue;
+		}
+
+		r_kext_fill_text_range (kext);
+		kext->vaddr = K_PPTR (kext->vaddr);
+		kext->pa2va_exec = obj->pa2va_exec;
+		kext->pa2va_data = obj->pa2va_data;
+		kext->name = strdup (padded_name);
+		kext->own_name = true;
+		free (padded_name);
+		r_list_push (kexts, kext);
+
+		cursor += cmdsize;
+	}
+early:
+	return kexts;
+beach:
+	r_list_free (kexts);
 	return NULL;
 }
 
@@ -680,10 +804,16 @@ static struct MACH0_(obj_t) *create_kext_mach0(RKernelCacheObj *obj, RKext *kext
 	opts.header_at = 0;
 	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (buf, &opts);
 	r_buf_free (buf);
-	if (!mach0) {
-		return NULL;
-	}
+	return mach0;
+}
 
+static struct MACH0_(obj_t) *create_kext_shared_mach0(RKernelCacheObj *obj, RKext *kext) {
+	RBuffer *buf = r_buf_ref (obj->cache_buf);
+	struct MACH0_(opts_t) opts;
+	opts.verbose = false;
+	opts.header_at = kext->range.offset;
+	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (buf, &opts);
+	r_buf_free (buf);
 	return mach0;
 }
 
@@ -807,9 +937,9 @@ static void create_initterm_syms(RKext *kext, RList *ret, int type, ut64 *pointe
 		sym->vaddr = func_vaddr;
 		sym->paddr = func_vaddr - kext->pa2va_exec;
 		sym->size = 0;
-		sym->forwarder = r_str_const ("NONE");
-		sym->bind = r_str_const ("GLOBAL");
-		sym->type = r_str_const ("FUNC");
+		sym->forwarder = "NONE";
+		sym->bind = "GLOBAL";
+		sym->type = "FUNC";
 
 		r_list_append (ret, sym);
 	}
@@ -861,9 +991,9 @@ static void process_constructors(RKernelCacheObj *obj, struct MACH0_(obj_t) *mac
 				sym->vaddr = addr64;
 				sym->paddr = paddr64;
 				sym->size = 0;
-				sym->forwarder = r_str_const ("NONE");
-				sym->bind = r_str_const ("GLOBAL");
-				sym->type = r_str_const ("FUNC");
+				sym->forwarder = "NONE";
+				sym->bind = "GLOBAL";
+				sym->type = "FUNC";
 
 				r_list_append (ret, sym);
 			}
@@ -1133,10 +1263,9 @@ static void symbols_from_mach0(RList *ret, struct MACH0_(obj_t) *mach0, RBinFile
 				}
 			}
 		}
-		sym->forwarder = r_str_const ("NONE");
-		sym->bind = r_str_const ((symbols[i].type == R_BIN_MACH0_SYMBOL_TYPE_LOCAL)?
-			"LOCAL": "GLOBAL");
-		sym->type = r_str_const ("FUNC");
+		sym->forwarder = "NONE";
+		sym->bind = (symbols[i].type == R_BIN_MACH0_SYMBOL_TYPE_LOCAL)? "LOCAL": "GLOBAL";
+		sym->type = "FUNC";
 		sym->paddr = symbols[i].offset + bf->o->boffset + paddr;
 		sym->size = symbols[i].size;
 		sym->ordinal = ordinal + i;
@@ -1247,9 +1376,9 @@ static RList *resolve_syscalls(RKernelCacheObj *obj, ut64 enosys_addr) {
 	sym->vaddr = sysent_vaddr;
 	sym->paddr = cursor - data_const + data_const_offset;
 	sym->size = 0;
-	sym->forwarder = r_str_const ("NONE");
-	sym->bind = r_str_const ("GLOBAL");
-	sym->type = r_str_const ("OBJECT");
+	sym->forwarder = "NONE";
+	sym->bind = "GLOBAL";
+	sym->type = "OBJECT";
 	r_list_append (syscalls, sym);
 
 	i = 1;
@@ -1261,6 +1390,7 @@ static RList *resolve_syscalls(RKernelCacheObj *obj, ut64 enosys_addr) {
 		if (item && item->name) {
 			RBinSymbol *sym = R_NEW0 (RBinSymbol);
 			if (!sym) {
+				r_syscall_item_free (item);
 				goto beach;
 			}
 
@@ -1268,14 +1398,12 @@ static RList *resolve_syscalls(RKernelCacheObj *obj, ut64 enosys_addr) {
 			sym->vaddr = addr;
 			sym->paddr = addr;
 			sym->size = 0;
-			sym->forwarder = r_str_const ("NONE");
-			sym->bind = r_str_const ("GLOBAL");
-			sym->type = r_str_const ("FUNC");
+			sym->forwarder = "NONE";
+			sym->bind = "GLOBAL";
+			sym->type = "FUNC";
 			r_list_append (syscalls, sym);
-
-			r_syscall_item_free (item);
 		}
-
+		r_syscall_item_free (item);
 		cursor += 24;
 		i++;
 	}
@@ -1299,7 +1427,7 @@ beach:
 #define K_MIG_ROUTINE_SIZE (5 * 8)
 #define K_MIG_MAX_ROUTINES 100
 
-static HtPP *mig_hash_new() {
+static HtPP *mig_hash_new(void) {
 	HtPP *hash = sdb_ht_new ();
 	if (!hash) {
 		return NULL;
@@ -1376,13 +1504,13 @@ static RList *resolve_mig_subsystem(RKernelCacheObj *obj) {
 		}
 		ut32 subs_min_idx = r_read_le32 (cursor + 8);
 		ut32 subs_max_idx = r_read_le32 (cursor + 12);
-		ut32 n_routines = (subs_max_idx - subs_min_idx);
 		if (subs_min_idx >= subs_max_idx || (subs_max_idx - subs_min_idx) > K_MIG_MAX_ROUTINES) {
 			cursor += 16;
 			continue;
 		}
 
-		ut64 *routines = (ut64 *) malloc (n_routines * sizeof (ut64));
+		ut32 n_routines = (subs_max_idx - subs_min_idx);
+		ut64 *routines = (ut64 *) calloc (n_routines, sizeof (ut64));
 		if (!routines) {
 			goto beach;
 		}
@@ -1433,9 +1561,9 @@ static RList *resolve_mig_subsystem(RKernelCacheObj *obj) {
 				sym->vaddr = routine_p;
 				sym->paddr = sym->vaddr - text_exec_vaddr + text_exec_offset;
 				sym->size = 0;
-				sym->forwarder = r_str_const ("NONE");
-				sym->bind = r_str_const ("GLOBAL");
-				sym->type = r_str_const ("OBJECT");
+				sym->forwarder = "NONE";
+				sym->bind = "GLOBAL";
+				sym->type = "OBJECT";
 				r_list_append (subsystem, sym);
 			}
 
@@ -1522,9 +1650,9 @@ static void symbols_from_stubs(RList *ret, HtPP *kernel_syms_by_addr, RKernelCac
 				sym->vaddr = vaddr;
 				sym->paddr = stubs_cursor;
 				sym->size = 12;
-				sym->forwarder = r_str_const ("NONE");
-				sym->bind = r_str_const ("LOCAL");
-				sym->type = r_str_const ("FUNC");
+				sym->forwarder = "NONE";
+				sym->bind = "LOCAL";
+				sym->type = "FUNC";
 				sym->ordinal = ordinal ++;
 				r_list_append (ret, sym);
 				break;
@@ -1552,9 +1680,9 @@ static void symbols_from_stubs(RList *ret, HtPP *kernel_syms_by_addr, RKernelCac
 		remote_sym->vaddr = target_addr;
 		remote_sym->paddr = target_addr - obj->pa2va_exec;
 		remote_sym->size = 0;
-		remote_sym->forwarder = r_str_const ("NONE");
-		remote_sym->bind = r_str_const ("GLOBAL");
-		remote_sym->type = r_str_const ("FUNC");
+		remote_sym->forwarder = "NONE";
+		remote_sym->bind = "GLOBAL";
+		remote_sym->type = "FUNC";
 		remote_sym->ordinal = ordinal ++;
 		r_list_append (ret, remote_sym);
 
@@ -1567,9 +1695,9 @@ static void symbols_from_stubs(RList *ret, HtPP *kernel_syms_by_addr, RKernelCac
 		local_sym->vaddr = vaddr;
 		local_sym->paddr = stubs_cursor;
 		local_sym->size = 12;
-		local_sym->forwarder = r_str_const ("NONE");
-		local_sym->bind = r_str_const ("GLOBAL");
-		local_sym->type = r_str_const ("FUNC");
+		local_sym->forwarder = "NONE";
+		local_sym->bind = "GLOBAL";
+		local_sym->type = "FUNC";
 		local_sym->ordinal = ordinal ++;
 		r_list_append (ret, local_sym);
 	}
@@ -1585,6 +1713,7 @@ static RStubsInfo *get_stubs_info(struct MACH0_(obj_t) *mach0, ut64 paddr, RKern
 
 	RStubsInfo *stubs_info = R_NEW0 (RStubsInfo);
 	if (!stubs_info) {
+		free (sections);
 		return NULL;
 	}
 
@@ -1849,20 +1978,15 @@ static ut64 iterate_rebase_list(RBuffer *cache_buf, ut64 multiplier, ut64 start_
 }
 
 static void swizzle_io_read(RKernelCacheObj *obj, RIO *io) {
-	if (!io || !io->desc || !io->desc->plugin) {
-		return;
-	}
-
+	r_return_if_fail (io && io->desc && io->desc->plugin);
 	RIOPlugin *plugin = io->desc->plugin;
 	obj->original_io_read = plugin->read;
 	plugin->read = &kernelcache_io_read;
 }
 
 static int kernelcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	if (!io) {
-		return -1;
-	}
-	RCore *core = (RCore*) io->user;
+	r_return_val_if_fail (io, -1);
+	RCore *core = (RCore*) io->corebind.core;
 
 	if (!core || !core->bin || !core->bin->binfiles) {
 		return -1;
@@ -1898,13 +2022,21 @@ static int kernelcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	}
 
 	if (!cache || !cache->original_io_read || cache->rebasing_buffer) {
-		if (fd->plugin->read == &kernelcache_io_read) {
-			return -1;
+		if (cache) {
+			if ((!cache->rebasing_buffer && fd->plugin->read == &kernelcache_io_read) ||
+					(cache->rebasing_buffer && !cache->original_io_read)) {
+				return -1;
+			}
+			if (cache->rebasing_buffer) {
+				return cache->original_io_read (io, fd, buf, count);
+			}
 		}
 		return fd->plugin->read (io, fd, buf, count);
 	}
 
-	r_rebase_info_populate (cache->rebase_info, cache);
+	if (cache->rebase_info) {
+		r_rebase_info_populate (cache->rebase_info, cache);
+	}
 
 	static ut8 *internal_buffer = NULL;
 	static int internal_buf_size = 0;
@@ -1917,23 +2049,30 @@ static int kernelcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 		internal_buf_size = count;
 	}
 
+	if (!cache->original_io_read) {
+		return -1;
+	}
+	ut64 io_off = io->off;
 	int result = cache->original_io_read (io, fd, internal_buffer, count);
 
 	if (result == count) {
-		rebase_buffer (cache, io, fd, internal_buffer, count);
+		if (cache->mach0->chained_starts) {
+			rebase_buffer_fixup (cache, io_off, fd, internal_buffer, count);
+		} else if (cache->rebase_info) {
+			rebase_buffer (cache, io_off, fd, internal_buffer, count);
+		}
 		memcpy (buf, internal_buffer, result);
 	}
 
 	return result;
 }
 
-static void rebase_buffer(RKernelCacheObj *obj, RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	if (obj->rebasing_buffer) {
+static void rebase_buffer(RKernelCacheObj *obj, ut64 off, RIODesc *fd, ut8 *buf, int count) {
+	if (obj->rebasing_buffer || !buf) {
 		return;
 	}
 	obj->rebasing_buffer = true;
 
-	ut64 off = io->off;
 	ut64 eob = off + count;
 	int i = 0;
 	RRebaseCtx ctx;
@@ -1954,6 +2093,99 @@ static void rebase_buffer(RKernelCacheObj *obj, RIO *io, RIODesc *fd, ut8 *buf, 
 	}
 
 	obj->rebasing_buffer = false;
+}
+
+static void rebase_buffer_fixup(RKernelCacheObj *kobj, ut64 off, RIODesc *fd, ut8 *buf, int count) {
+	if (kobj->rebasing_buffer) {
+		return;
+	}
+	kobj->rebasing_buffer = true;
+	struct MACH0_(obj_t) *obj = kobj->mach0;
+	ut64 eob = off + count;
+	size_t i = 0;
+	for (; i < obj->nsegs; i++) {
+		if (!obj->chained_starts[i]) {
+			continue;
+		}
+		ut64 page_size = obj->chained_starts[i]->page_size;
+		ut64 start = obj->segs[i].fileoff;
+		ut64 end = start + obj->segs[i].filesize;
+		if (end >= off && start <= eob) {
+			ut64 page_idx = (R_MAX (start, off) - start) / page_size;
+			ut64 page_end_idx = (R_MIN (eob, end) - start) / page_size;
+			for (; page_idx <= page_end_idx; page_idx++) {
+				if (page_idx >= obj->chained_starts[i]->page_count) {
+					break;
+				}
+				ut16 page_start = obj->chained_starts[i]->page_start[page_idx];
+				if (page_start == DYLD_CHAINED_PTR_START_NONE) {
+					continue;
+				}
+				ut64 cursor = start + page_idx * page_size + page_start;
+				while (cursor < eob && cursor < end) {
+					ut8 tmp[8];
+					if (r_buf_read_at (obj->b, cursor, tmp, 8) != 8) {
+						break;
+					}
+					ut64 raw_ptr = r_read_le64 (tmp);
+					ut64 ptr_value = raw_ptr;
+					ut64 delta = 0;
+					ut64 stride = 8;
+					if (obj->chained_starts[i]->pointer_format == DYLD_CHAINED_PTR_ARM64E) {
+						bool is_auth = IS_PTR_AUTH (raw_ptr);
+						bool is_bind = IS_PTR_BIND (raw_ptr);
+						if (is_auth && is_bind) {
+							struct dyld_chained_ptr_arm64e_auth_bind *p =
+									(struct dyld_chained_ptr_arm64e_auth_bind *) &raw_ptr;
+							delta = p->next;
+						} else if (!is_auth && is_bind) {
+							struct dyld_chained_ptr_arm64e_bind *p =
+									(struct dyld_chained_ptr_arm64e_bind *) &raw_ptr;
+							delta = p->next;
+						} else if (is_auth && !is_bind) {
+							struct dyld_chained_ptr_arm64e_auth_rebase *p =
+									(struct dyld_chained_ptr_arm64e_auth_rebase *) &raw_ptr;
+							delta = p->next;
+							ptr_value = p->target + obj->baddr;
+						} else {
+							struct dyld_chained_ptr_arm64e_rebase *p =
+									(struct dyld_chained_ptr_arm64e_rebase *) &raw_ptr;
+							delta = p->next;
+							ptr_value = ((ut64)p->high8 << 56) | p->target;
+							ptr_value += obj->baddr;
+						}
+					} else if (obj->chained_starts[i]->pointer_format == DYLD_CHAINED_PTR_64_KERNEL_CACHE ||
+							obj->chained_starts[i]->pointer_format == DYLD_CHAINED_PTR_ARM64E_KERNEL) {
+						bool is_auth = IS_PTR_AUTH (raw_ptr);
+						stride = 4;
+						if (is_auth) {
+							struct dyld_chained_ptr_arm64e_cache_auth_rebase *p =
+									(struct dyld_chained_ptr_arm64e_cache_auth_rebase *) &raw_ptr;
+							delta = p->next;
+							ptr_value = p->target + obj->baddr;
+						} else {
+							struct dyld_chained_ptr_arm64e_cache_rebase *p =
+									(struct dyld_chained_ptr_arm64e_cache_rebase *) &raw_ptr;
+							delta = p->next;
+							ptr_value = ((ut64)p->high8 << 56) | p->target;
+							ptr_value += obj->baddr;
+						}
+					} else {
+						eprintf ("Unsupported pointer format: %u\n", obj->chained_starts[i]->pointer_format);
+					}
+					ut64 in_buf = cursor - off;
+					if (cursor >= off && cursor <= eob - 8) {
+						r_write_le64 (&buf[in_buf], ptr_value);
+					}
+					cursor += delta * stride;
+					if (!delta) {
+						break;
+					}
+				}
+			}
+		}
+	}
+	kobj->rebasing_buffer = false;
 }
 
 static bool on_rebase_pointer (ut64 offset, ut64 decorated_addr, RRebaseCtx *ctx) {

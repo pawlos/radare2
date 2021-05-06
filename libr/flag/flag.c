@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2007-2019 - pancake, ret2libc */
+/* radare - LGPL - Copyright 2007-2021 - pancake, ret2libc */
 
 #include <r_flag.h>
 #include <r_util.h>
@@ -98,6 +98,9 @@ static void remove_offsetmap(RFlag *f, RFlagItem *item) {
 }
 
 static RFlagsAtOffset *flags_at_offset(RFlag *f, ut64 off) {
+	if (f->mask) {
+		off &= f->mask;
+	}
 	RFlagsAtOffset *res = r_flag_get_nearest_list (f, off, 0);
 	if (res) {
 		return res;
@@ -215,7 +218,7 @@ static void new_spaces(RFlag *f) {
 	r_event_hook (f->spaces.event, R_SPACE_EVENT_UNSET, unset_flagspace, NULL);
 }
 
-R_API RFlag *r_flag_new() {
+R_API RFlag *r_flag_new(void) {
 	RFlag *f = R_NEW0 (RFlag);
 	if (!f) {
 		return NULL;
@@ -227,19 +230,10 @@ R_API RFlag *r_flag_new() {
 	}
 	f->base = 0;
 	f->cb_printf = (PrintfCallback)printf;
-#if R_FLAG_ZONE_USE_SDB
-	f->zones = sdb_new0 ();
-#else
-	f->zones = NULL;
-#endif
+	f->zones = r_list_newf (r_flag_zone_item_free);
 	f->tags = sdb_new0 ();
 	f->ht_name = ht_pp_new (NULL, ht_free_flag, NULL);
 	f->by_off = r_skiplist_new (flag_skiplist_free, flag_skiplist_cmp);
-#if R_FLAG_ZONE_USE_SDB
-	sdb_free (f->zones);
-#else
-	r_list_free (f->zones);
-#endif
 	new_spaces(f);
 	return f;
 }
@@ -282,6 +276,7 @@ R_API RFlag *r_flag_free(RFlag *f) {
 	sdb_free (f->tags);
 	r_spaces_fini (&f->spaces);
 	r_num_free (f->num);
+	r_list_free (f->zones);
 	free (f);
 	return NULL;
 }
@@ -309,7 +304,10 @@ static bool print_flag_json(RFlagItem *flag, void *user) {
 		return true;
 	}
 	pj_o (u->pj);
-	pj_ks (u->pj, "name", u->real ? flag->realname : flag->name);
+	pj_ks (u->pj, "name", flag->name);
+	if (flag->name != flag->realname) {
+		pj_ks (u->pj, "realname", flag->realname);
+	}
 	pj_ki (u->pj, "size", flag->size);
 	if (flag->alias) {
 		pj_ks (u->pj, "alias", flag->alias);
@@ -346,13 +344,13 @@ static bool print_flag_rad(RFlagItem *flag, void *user) {
 		u->f->cb_printf ("fa %s %s\n", flag->name, flag->alias);
 		if (comment_b64) {
 			u->f->cb_printf ("\"fC %s %s\"\n",
-				flag->name, comment_b64? comment_b64: "");
+				flag->name, r_str_get (comment_b64));
 		}
 	} else {
 		u->f->cb_printf ("f %s %" PFMT64d " 0x%08" PFMT64x "%s%s %s\n",
 			flag->name, flag->size, flag->offset,
-			u->pfx? "+": "", u->pfx? u->pfx: "",
-			comment_b64? comment_b64: "");
+			u->pfx? "+": "", r_str_get (u->pfx),
+			r_str_get (comment_b64));
 	}
 
 	free (comment_b64);
@@ -482,6 +480,9 @@ R_API bool r_flag_exist_at(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64
 	r_return_val_if_fail (f && flag_prefix, NULL);
 	RListIter *iter = NULL;
 	RFlagItem *item = NULL;
+	if (f->mask) {
+		off &= f->mask;
+	}
 	const RList *list = r_flag_get_list (f, off);
 	if (list) {
 		r_list_foreach (list, iter, item) {
@@ -504,6 +505,9 @@ R_API RFlagItem *r_flag_get(RFlag *f, const char *name) {
 /* return the first flag item that can be found at offset "off", or NULL otherwise */
 R_API RFlagItem *r_flag_get_i(RFlag *f, ut64 off) {
 	r_return_val_if_fail (f, NULL);
+	if (f->mask) {
+		off &= f->mask;
+	}
 	const RList *list = r_flag_get_list (f, off);
 	return list? evalFlag (f, r_list_get_top (list)): NULL;
 }
@@ -513,6 +517,9 @@ R_API RFlagItem *r_flag_get_i(RFlag *f, ut64 off) {
  * Pass in the name of each space, in order, followed by a NULL */
 R_API RFlagItem *r_flag_get_by_spaces(RFlag *f, ut64 off, ...) {
 	r_return_val_if_fail (f, NULL);
+	if (f->mask) {
+		off &= f->mask;
+	}
 
 	const RList *list = r_flag_get_list (f, off);
 	RFlagItem *ret = NULL;
@@ -559,7 +566,7 @@ R_API RFlagItem *r_flag_get_by_spaces(RFlag *f, ut64 off, ...) {
 	r_list_foreach (list, iter, flg) {
 		// get the "priority" of the flag flagspace and
 		// check if better than what we found so far
-		for (i = 0; i < n_spaces; ++i) {
+		for (i = 0; i < n_spaces; i++) {
 			if (flg->space == spaces[i]) {
 				break;
 			}
@@ -595,14 +602,18 @@ static bool isFunctionFlag(const char *n) {
  * NULL is returned if such a item is not found. */
 R_API RFlagItem *r_flag_get_at(RFlag *f, ut64 off, bool closest) {
 	r_return_val_if_fail (f, NULL);
+	if (f->mask) {
+		off &= f->mask;
+	}
 
-	RFlagItem *item, *nice = NULL;
+	RFlagItem *nice = NULL;
 	RListIter *iter;
 	const RFlagsAtOffset *flags_at = r_flag_get_nearest_list (f, off, -1);
 	if (!flags_at) {
 		return NULL;
 	}
 	if (flags_at->off == off) {
+		RFlagItem *item;
 		r_list_foreach (flags_at->flags, iter, item) {
 			if (IS_FI_NOTIN_SPACE (f, item)) {
 				continue;
@@ -615,13 +626,16 @@ R_API RFlagItem *r_flag_get_at(RFlag *f, ut64 off, bool closest) {
 				nice = item;
 			}
 		}
-		return nice;
+		if (nice) {
+			return evalFlag (f, nice);
+		}
 	}
 
 	if (!closest) {
 		return NULL;
 	}
 	while (!nice && flags_at) {
+		RFlagItem *item;
 		r_list_foreach (flags_at->flags, iter, item) {
 			if (IS_FI_NOTIN_SPACE (f, item)) {
 				continue;
@@ -633,7 +647,7 @@ R_API RFlagItem *r_flag_get_at(RFlag *f, ut64 off, bool closest) {
 			nice = item;
 			break;
 		}
-		if (flags_at->off) {
+		if (!nice && flags_at->off) {
 			flags_at = r_flag_get_nearest_list (f, flags_at->off - 1, -1);
 		} else {
 			flags_at = NULL;
@@ -661,6 +675,9 @@ R_API RList *r_flag_all_list(RFlag *f, bool by_space) {
 
 /* return the list of flag items that are associated with a given offset */
 R_API const RList* /*<RFlagItem*>*/ r_flag_get_list(RFlag *f, ut64 off) {
+	if (f->mask) {
+		off &= f->mask;
+	}
 	const RFlagsAtOffset *item = r_flag_get_nearest_list (f, off, 0);
 	return item ? item->flags : NULL;
 }
@@ -668,11 +685,14 @@ R_API const RList* /*<RFlagItem*>*/ r_flag_get_list(RFlag *f, ut64 off) {
 R_API char *r_flag_get_liststr(RFlag *f, ut64 off) {
 	RFlagItem *fi;
 	RListIter *iter;
+	if (f->mask) {
+		off &= f->mask;
+	}
 	const RList *list = r_flag_get_list (f, off);
 	char *p = NULL;
 	r_list_foreach (list, iter, fi) {
 		p = r_str_appendf (p, "%s%s",
-			fi->realname, iter->n? ",": ":");
+			fi->realname, iter->n? ",": "");
 	}
 	return p;
 }
@@ -681,6 +701,9 @@ R_API char *r_flag_get_liststr(RFlag *f, ut64 off) {
 // the same name, slightly change the name by appending ".%d" as suffix
 R_API RFlagItem *r_flag_set_next(RFlag *f, const char *name, ut64 off, ut32 size) {
 	r_return_val_if_fail (f && name, NULL);
+	if (f->mask) {
+		off &= f->mask;
+	}
 	if (!r_flag_get (f, name)) {
 		return r_flag_set (f, name, off, size);
 	}
@@ -708,10 +731,18 @@ R_API RFlagItem *r_flag_set_next(RFlag *f, const char *name, ut64 off, ut32 size
  * NULL is returned in case of any errors during the process. */
 R_API RFlagItem *r_flag_set(RFlag *f, const char *name, ut64 off, ut32 size) {
 	r_return_val_if_fail (f && name && *name, NULL);
+	if (f->mask) {
+		off &= f->mask;
+	}
 
 	bool is_new = false;
 	char *itemname = filter_item_name (name);
 	if (!itemname) {
+		return NULL;
+	}
+	// this should never happen because the name is filtered before..
+	if (!r_name_check (itemname)) {
+		eprintf ("Invalid flag name '%s'\n", name);
 		return NULL;
 	}
 
@@ -760,6 +791,14 @@ R_API void r_flag_item_set_realname(RFlagItem *item, const char *realname) {
 	r_return_if_fail (item);
 	free_item_realname (item);
 	item->realname = R_STR_ISEMPTY (realname)? NULL: strdup (realname);
+}
+
+/* add/replace/remove the color of a flag item */
+R_API const char *r_flag_item_set_color(RFlagItem *item, const char *color) {
+	r_return_val_if_fail (item, NULL);
+	free (item->color);
+	item->color = (color && *color) ? strdup (color) : NULL;
+	return item->color;
 }
 
 /* change the name of a flag item, if the new name is available.
@@ -882,16 +921,6 @@ R_API bool r_flag_move(RFlag *f, ut64 at, ut64 to) {
 	return false;
 }
 
-R_API const char *r_flag_color(RFlag *f, RFlagItem *it, const char *color) {
-	r_return_val_if_fail (f && it, NULL);
-	if (!color) {
-		return it->color;
-	}
-	free (it->color);
-	it->color = *color ? strdup (color) : NULL;
-	return it->color;
-}
-
 // BIND
 R_API void r_flag_bind(RFlag *f, RFlagBind *fb) {
 	r_return_if_fail (f && fb);
@@ -899,6 +928,7 @@ R_API void r_flag_bind(RFlag *f, RFlagBind *fb) {
 	fb->exist_at = r_flag_exist_at;
 	fb->get = r_flag_get;
 	fb->get_at = r_flag_get_at;
+	fb->get_list = r_flag_get_list;
 	fb->set = r_flag_set;
 	fb->unset = r_flag_unset;
 	fb->unset_name = r_flag_unset_name;

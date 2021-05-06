@@ -83,7 +83,7 @@ def main():
     match = re.search('^\+\+\+\ (.*?/){%s}(\S*)' % args.p, line)
     if match:
       filename = match.group(2)
-    if filename == None:
+    if filename is None:
       continue
 
     if args.regex is not None:
@@ -101,32 +101,33 @@ def main():
         line_count = int(match.group(3))
       if line_count == 0:
         continue
-      end_line = start_line + line_count - 1
-      ranges = []
       range_start, range_end = None, None
       range_line = -1
       debug(line_count)
       i = 0
       while True:
         # stop iterating when finding the next diff
-        if lineidx + i >= len(input) or input[lineidx + i].startswith('diff'):
+        if lineidx + i >= len(input):
           break
 
-        debug('lineidx : ' + input[lineidx + i])
         # do not count lines that are removed
         if not input[lineidx + i].startswith('-'):
           range_line += 1
 
         if input[lineidx + i].startswith('+'):
           if range_start is None:
-            range_start = start_line + range_line
+            range_start = start_line + range_line - 1
             debug('set range_start: ' + str(start_line + range_line))
         elif range_start is not None and range_end is None:
-            range_end = start_line + range_line
+            range_end = start_line + range_line - 1
             debug('set range_end: ' + str(start_line + range_line))
             lines_by_file.setdefault(filename, []).append([range_start, range_end - 1])
             range_start, range_end = None, None
 
+        debug('lineidx : ' + input[lineidx + i])
+
+        if input[lineidx + i].startswith('diff') or (i != 0 and input[lineidx + i].startswith('@@')):
+            break
         i += 1
 
   # Reformat files containing changes in place.

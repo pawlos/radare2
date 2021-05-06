@@ -136,11 +136,15 @@ static int r_io_zip_slurp_file(RIOZipFileObj *zfo) {
 
 	if (zipArch && zfo && zfo->entry != -1) {
 		zFile = zip_fopen_index (zipArch, zfo->entry, 0);
+		if (!zFile) {
+			zip_close (zipArch);
+			return false;
+		}
 		if (!zfo->b) {
 			zfo->b = r_buf_new ();
 		}
 		zip_stat_init (&sb);
-		if (zFile && zfo->b && !zip_stat_index (zipArch, zfo->entry, 0, &sb)) {
+		if (zfo->b && !zip_stat_index (zipArch, zfo->entry, 0, &sb)) {
 			ut8 *buf = calloc (1, sb.size);
 			if (buf) {
 				zip_fread (zFile, buf, sb.size);
@@ -556,7 +560,11 @@ static int r_io_zip_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	if (r_buf_size (zfo->b) < io->off) {
 		io->off = r_buf_size (zfo->b);
 	}
-	return r_buf_read_at (zfo->b, io->off, buf, count);
+	int r = r_buf_read_at (zfo->b, io->off, buf, count);
+	if (r >= 0) {
+		r_buf_seek (zfo->b, r, R_BUF_CUR);
+	}
+	return r;
 }
 
 static int r_io_zip_realloc_buf(RIOZipFileObj *zfo, int count) {
@@ -599,6 +607,9 @@ static int r_io_zip_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	}
 	zfo->modified = 1;
 	ret = r_buf_write_at (zfo->b, io->off, buf, count);
+	if (ret >= 0) {
+		r_buf_seek (zfo->b, ret, R_BUF_CUR);
+	}
 	// XXX - Implement a flush of some sort, but until then, lets
 	// just write through
 	r_io_zip_flush_file (zfo);

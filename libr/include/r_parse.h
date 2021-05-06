@@ -13,18 +13,18 @@ extern "C" {
 
 R_LIB_VERSION_HEADER(r_parse);
 
-typedef RList* (*RAnalVarList)(RAnal *anal, RAnalFunction *fcn, int kind);
+typedef RList* (*RAnalVarList)(RAnalFunction *fcn, int kind);
 
 typedef struct r_parse_t {
 	void *user;
 	RSpace *flagspace;
 	RSpace *notin_flagspace;
 	bool pseudo;
-	bool regsub; // replace registers with their respective alias/role name (rdi=A0, ...)
-	bool relsub; // replace rip relative expressions in instruction
-	bool tailsub; // replace any immediate relative to current address with .. prefix syntax
+	bool subreg; // replace registers with their respective alias/role name (rdi=A0, ...)
+	bool subrel; // replace rip relative expressions in instruction
+	bool subtail; // replace any immediate relative to current address with .. prefix syntax
 	bool localvar_only; // if true use only the local variable name (e.g. [local_10h] instead of [ebp + local10h])
-	ut64 relsub_addr;
+	ut64 subrel_addr;
 	int maxflagnamelen;
 	int minval;
 	char *retleave_asm;
@@ -32,6 +32,8 @@ typedef struct r_parse_t {
 	// RAnal *anal; // weak anal ref XXX do not use. use analb.anal
 	RList *parsers;
 	RAnalVarList varlist;
+	st64 (*get_ptr_at)(RAnalFunction *fcn, st64 delta, ut64 addr);
+	const char *(*get_reg_at)(RAnalFunction *fcn, st64 delta, ut64 addr);
 	char* (*get_op_ireg)(void *user, ut64 addr);
 	RAnalBind analb;
 	RFlagGetAtAddr flag_get; // XXX
@@ -46,7 +48,7 @@ typedef struct r_parse_plugin_t {
 	int (*parse)(RParse *p, const char *data, char *str);
 	bool (*assemble)(RParse *p, char *data, char *str);
 	int (*filter)(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len, bool big_endian);
-	bool (*varsub)(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len);
+	bool (*subvar)(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len);
 	int (*replace)(int argc, const char *argv[], char *newstr);
 } RParsePlugin;
 
@@ -65,7 +67,7 @@ R_API bool r_parse_use(RParse *p, const char *name);
 R_API bool r_parse_parse(RParse *p, const char *data, char *str);
 R_API bool r_parse_assemble(RParse *p, char *data, char *str); // XXX deprecate, unused and probably useless, related to write-hack
 R_API bool r_parse_filter(RParse *p, ut64 addr, RFlag *f, RAnalHint *hint, char *data, char *str, int len, bool big_endian);
-R_API bool r_parse_varsub(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len);
+R_API bool r_parse_subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len);
 R_API char *r_parse_immtrim(char *opstr);
 
 /* c */
@@ -107,7 +109,7 @@ struct r_parse_ctype_type_t {
 		} pointer;
 		struct {
 			RParseCTypeType *type;
-			ut64 count;
+			size_t count;
 		} array;
 	};
 };
@@ -130,8 +132,11 @@ extern RParsePlugin r_parse_plugin_mips_pseudo;
 extern RParsePlugin r_parse_plugin_ppc_pseudo;
 extern RParsePlugin r_parse_plugin_sh_pseudo;
 extern RParsePlugin r_parse_plugin_wasm_pseudo;
+extern RParsePlugin r_parse_plugin_riscv_pseudo;
 extern RParsePlugin r_parse_plugin_x86_pseudo;
 extern RParsePlugin r_parse_plugin_z80_pseudo;
+extern RParsePlugin r_parse_plugin_tms320_pseudo;
+extern RParsePlugin r_parse_plugin_v850_pseudo;
 #endif
 
 #ifdef __cplusplus

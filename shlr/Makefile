@@ -1,6 +1,5 @@
-include ../global.mk
 include ../config-user.mk
-# for EXT_EXE
+include ../global.mk
 include ../libr/config.mk
 include ../mk/platform.mk
 _INCLUDE_MK_GCC_=
@@ -14,20 +13,18 @@ else
 CS_RELEASE=1
 endif
 
-CS_NEXT=${CSNEXT}
-
 CAPSTONE_CFLAGS?=-g
 # CAPSTONE_MAKEFLAGS?=CAPSTONE_ARCHS="arm aarch64"
 
 GIT?=git
-ifeq ($(shell type wget && echo 1),1)
+ifeq ($(shell type wget 2> /dev/null && echo 1),1)
 WGET?=wget -c --no-check-certificate -O
 else
 WGET?=curl -o
 endif
 
 ifeq ($(CS_RELEASE),1)
-CS_VER=4.0.1
+CS_VER=4.0.2
 CS_TAR=https://codeload.github.com/aquynh/capstone/tar.gz/$(CS_VER)
 #CS_TAR=http://capstone-engine.org/download/$(CS_VER)/capstone-$(CS_VER).tgz
 CS_PATCHES=0
@@ -36,34 +33,34 @@ CS_TAR=
 CS_URL_BASE=github.com/aquynh/capstone
 CS_URL=$(GIT_PREFIX)$(CS_URL_BASE).git
 CS_ARCHIVE=https://$(CS_URL_BASE)/archive
-CS_UPD=20190515
-ifeq ($(CS_NEXT),1)
-CS_TIP=5809774f62847e6755aa054746822ce32e369b3a
-CS_BRA=next
-else
-CS_TIP=c7d2b984af855ef9fbf8f8fd33ca7005da644b4a
+CS_UPD=20201203
+# NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/meson.build
+ifeq ($(USE_CS4),1)
+CS_TIP=aa74f5d1ba5348c0441fbff0c0c151d95d2fa459
 CS_BRA=v4
+else
+CS_TIP=702dbe78ca116de8ec65f122d9202c2c1f4a2b4c
+CS_BRA=next
 endif
 ifeq ($(CS_COMMIT_ARCHIVE),1)
 CS_ARCHIVE_URL=$(CS_ARCHIVE)/$(CS_TIP).zip
 else
 CS_ARCHIVE_URL=
 endif
-# NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/meson.build
-#CS_BRA=next
-#CS_TIP=38607453f3de85733f9604dffc27778db3b53766
 # REVERT THIS COMMIT BECAUSE ITS WRONG
 CS_REV=
 CS_PATCHES=1
 endif
 
-.PHONY: capstone-sync capstone-build all clean mrproper libgdbr libwindbg bochs
+.PHONY: capstone-sync capstone-build all clean mrproper libgdbr libwinkd bochs sdbs
 
+ifeq ($(shell gcc -v > /dev/null 2>&1 && echo works),works)
 HOST_CC?=gcc
+endif
 SHLR?=$(shell pwd)
 AR?=ar
 RANLIB?=ranlib
-MODS=sdb zip java tcc mpc
+MODS=sdb zip java mpc yxml
 MODS+=gdb qnx ar
 # lz4
 ifneq ($(CC),cccl)
@@ -71,13 +68,9 @@ ifeq (1,$(WITH_GPL))
 MODS+=grub
 endif
 endif
-ifeq (1,$(USE_PTRACE_WRAP))
-MODS+=ptrace-wrap
-endif
-SDB_URL=git://github.com/radare/sdb
+SDB_URL=git://github.com/radareorg/sdb
 #SDB_URL=/Users/pancake/prg/sdb
 SPP_URL=git://github.com/radare/spp
-PTRACE_WRAP_URL=git://github.com/thestr4ng3r/ptrace-wrap
 PWD=$(shell pwd)
 SDB_CONFIG=${PWD}/sdb-config.mk
 
@@ -89,14 +82,14 @@ all:
 	exit 1
 endif
 
-preall: targets libwindbg capstone-build bochs
+preall: libwinkd capstone-build bochs
 	@for MOD in ${MODS} ; do \
 		echo $(MAKE) -C $$MOD ; \
 		$(MAKE) -C $$MOD HAVE_VALA= ROOT="${PWD}/../" CC="${CC}" ; \
 	done
 
 SDBFILES=sdb/src/.sdb${EXT_EXE} sdb/sdb${EXT_EXE} sdb/src/.sdb sdb/sdb
-PREMODS=capstone gdb windbg sdb bochs ar
+PREMODS=capstone gdb winkd sdb bochs ar
 
 clean mrproper:
 	rm -f ${SDBFILES}
@@ -108,60 +101,49 @@ else
 BUILD_EXT_EXE=
 endif
 
-SDB_TARGETS=$(SDBLIB)
-ifneq (${EXT_EXE},)
-SDB_TARGETS+=sdb/sdb${EXT_EXE}
-else
-SDB_TARGETS+=sdb/sdb
-endif
-
 PIC=
 ifneq ($(CC),cccl)
 PIC=-fPIC
-ifeq ($(filter sdb/sdb${BUILD_EXT_EXE},$(SDB_TARGETS)),)
-SDB_TARGETS+=sdb/sdb${BUILD_EXT_EXE}
-endif
 endif
 
-targets:
-	for TARGET in ${SDB_TARGETS} ; do ${MAKE} $$TARGET ; done
+SDB_HOST=sdb/sdb$(BUILD_EXT_EXE)
+SDB_LIBA=sdb/src/libsdb.a
 
-${SDB_TARGETS}:
+$(SDB_HOST):
+	$(MAKE) sdb-host HOST_CC=$(HOST_CC) CC=$(HOST_CC)
+
+$(SDB_LIBA):
+	$(MAKE) sdb-target
+
+sdbs: $(SDB_HOST)
+	$(MAKE) $(SDB_LIBA)
+
+sdb-host:
 	@echo
-	@echo BUILD SUMARY
-	@echo ============
-	@echo COMPILER ${COMPILER}
-	@echo CC ${CC}
-	@echo HOST_CC ${HOST_CC}
-	@echo HOST_OS ${HOST_OS}
-	@echo BUILD_OS ${BUILD_OS}
-	@echo ============
+	@echo ">>>>>>>>"
+	@echo "HOST SDB"
+	@echo ">>>>>>>>"
 	@echo
-	@echo ">>>>>>>>>>>>>>>>"
-	@echo "NATIVE BUILD SDB"
-	@echo ">>>>>>>>>>>>>>>>"
-	@echo
-	$(MAKE) -C sdb clean
-	$(MAKE) -C sdb src/sdb_version.h
-	$(MAKE) -C sdb/src CC=${HOST_CC} LDFLAGS='${HOST_LDFLAGS}' CPPFLAGS='' CFLAGS='${HOST_CFLAGS} ${PIC}' bin
+	$(MAKE) -C sdb clean ; rm -f sdb/src/*.o sdb/src/sdb_version.h
+	$(MAKE) -C sdb/src "CC=${HOST_CC}" LDFLAGS='${HOST_LDFLAGS}' CPPFLAGS='' CFLAGS='${HOST_CFLAGS} ${PIC}' bin
 	cp -f sdb/src/sdb${BUILD_EXT_EXE} sdb/src/.sdb${BUILD_EXT_EXE}
-	@echo
-	@echo ">>>>>>>>>>>>>>>>"
-	@echo "TARGET BUILD SDB"
-	@echo ">>>>>>>>>>>>>>>>"
-	@echo
-	$(MAKE) -C sdb clean
-	cd sdb ; $(MAKE) src/sdb_version.h
-	cd sdb/src ; $(MAKE) ARCH=xxx RANLIB="${RANLIB}" CFLAGS_SHARED="${CFLAGS_SHARED}" \
-		CC="${CC}" AR="${AR}" CFLAGS='${CFLAGS}' LDFLAGS='${LDFLAGS}' libsdb.a
-	${RANLIB} sdb/src/libsdb.a
-ifneq (${EXT_AR},a)
-	-cp -f sdb/src/libsdb.a sdb/src/libsdb.${EXT_AR}
-endif
-	rm -f $@
-	cp -f sdb/src/.sdb${BUILD_EXT_EXE} $@
+	cp -f sdb/src/sdb${BUILD_EXT_EXE} sdb/sdb$(BUILD_EXT_EXE)
+	rm -f $(SDB_LIBA)
+	-file sdb/sdb$(BUILD_EXT_EXE)
 
-.PHONY: sdb-sync sync-sdb sdbclean
+sdb-target:
+	@echo
+	@echo ">>>>>>>>>>"
+	@echo "TARGET SDB"
+	@echo ">>>>>>>>>>"
+	@echo
+	$(MAKE) -C sdb clean ; rm -f sdb/src/*.o sdb/src/sdb_version.h
+	$(MAKE) -C sdb/src sdb_version.h
+	$(MAKE) -C sdb/src ARCH=xxx RANLIB="${RANLIB}" CFLAGS_SHARED="${CFLAGS_SHARED}" \
+		CC="${CC}" AR="${AR}" ARCH=undefined CFLAGS='${CFLAGS}' LDFLAGS='${LDFLAGS}' libsdb.a
+	${RANLIB} sdb/src/libsdb.a
+
+.PHONY: sdb-sync sync-sdb sdbclean sdb-native sdb-target
 SDB_F=README.md config.mk src Makefile meson.build
 SDB_SYNCFILES=$(addprefix sdb.vc/,${SDB_F})
 I=../libr/include
@@ -169,8 +151,8 @@ I=../libr/include
 libgdbr:
 	$(MAKE) -C gdb all
 
-libwindbg:
-	$(MAKE) -C windbg all
+libwinkd:
+	$(MAKE) -C winkd all
 
 bochs:
 	$(MAKE) -C bochs all
@@ -185,65 +167,22 @@ sdb-sync sync-sdb:
 	git clone --depth 1 ${SDB_URL} sdb.vc
 	mkdir -p sdb
 	cp -rf ${SDB_SYNCFILES} sdb
-	rm -rf sdb.vc $I/sdb
-	mkdir -p $I/sdb
+	rm -rf sdb.vc
 	rm -f src/sdb_version.h
-	cd sdb ; $(MAKE) src/sdb_version.h
-	cp -f sdb/src/*.h $I/sdb
-	echo '#include <sdb/sdb.h>' > $I/sdb.h
+	$(MAKE) -C sdb src/sdb_version.h
 	mkdir -p sdb/test sdb/memcache
 	sed -e 's,HAVE_VALA=,HAVE_VALA=#,' sdb/config.mk > .t
 	mv .t sdb/config.mk
 	echo all clean mrproper: | tee sdb/test/Makefile > sdb/memcache/Makefile
-	git add $I/sdb*
 	git add sdb
 
-.PHONY: ptrace-wrap ptrace-wrap-sync sync-ptrace-wrap ptrace-wrap-clean clean-ptrace-wrap
-PTRACE_WRAP_F=include src README.md COPYING
-PTRACE_WRAP_SYNCFILES=$(addprefix ptrace-wrap.vc/,${PTRACE_WRAP_F})
-
-ptrace-wrap-sync sync-ptrace-wrap:
-	rm -rf ptrace-wrap ptrace-wrap.vc
-	git clone --depth 1 ${PTRACE_WRAP_URL} ptrace-wrap.vc
-	mkdir -p ptrace-wrap
-	cp -rf ${PTRACE_WRAP_SYNCFILES} ptrace-wrap
-	sed -e "s, library(, static_library(," -e "s,project(,# project(," -e "s,subdir(,# subdir(," ptrace-wrap.vc/meson.build > ptrace-wrap/meson.build
-	printf "include ../../libr/config.mk\ninclude ../../mk/platform.mk\ninclude ../../mk/${COMPILER}.mk\n\n" | cat - ptrace-wrap.vc/Makefile > ptrace-wrap/Makefile
-	rm -rf ptrace-wrap.vc
-	printf "CFLAGS+=-I\$$(STOP)/ptrace-wrap/include\nLINK+=\$$(STOP)/ptrace-wrap/libptrace_wrap.\$$(EXT_AR)\nPTRACEWRAP_OBJS=\$$(STOP)/ptrace-wrap/src/ptrace_wrap.o\n" > ptrace-wrap/deps.mk
-
-ptrace-wrap:
-	$(MAKE) -C ptrace-wrap all
-
-ptrace-wrap-clean clean-ptrace-wrap:
-	$(MAKE) -C ptrace-wrap clean
-
-$(TCCLIB) libr_tcc/libr_tcc.${EXT_AR}:
-	cd libr_tcc ; $(MAKE)
-
-tcc-clean tccclean:
-	cd libr_tcc ; $(MAKE) clean
-
-CFILES=i386-asm.c i386-gen.c libtcc.c tccasm.c tccelf.c tccgen.c tccpp.c
-HFILES=tcc.h i386-asm.h tcclib.h tcctok.h stab.h
-HFILES+=elf.h config.h i386-tok.h
-
-# TODO: use mob branch?
-
-.PHONY: sdb-sync sync-sdb sdbclean
-tcc-sync sync-tcc:
-	rm -rf _
-	$(GIT) clone --depth 1 git://repo.or.cz/tinycc.git _
-	cd _ ; ./configure --prefix=${PREFIX}
-	mkdir -p tcc
-	for FILE in ${CFILES} ${HFILES} ; do cp -f _/$$FILE tcc ; done
-	cp -f _/VERSION _/COPYING _/stab.def tcc
-	$(GIT) add tcc
-	rm -rf _
-
+ifeq ($(WITH_LIBR),1)
 install: libr_shlr.${EXT_AR}
 	mkdir -p ${DESTDIR}/${LIBDIR}
 	cp -f libr_shlr.${EXT_AR} ${DESTDIR}/${LIBDIR}
+else
+install:
+endif
 
 install-symlink symstall:
 	mkdir -p "${DESTDIR}${LIBDIR}"
@@ -275,7 +214,11 @@ capstone: capstone-$(CS_VER).tar.gz
 	mv capstone-$(CS_VER) capstone
 ifeq ($(CS_PATCHES),1)
 	if [ -d capstone/.git ]; then \
-		cd capstone ; for PATCH in ../capstone-patches/* ; do patch -p1 < $$PATCH ; done ; \
+ifeq ($(USE_CS4),1)
+		cd capstone ; for PATCH in ../capstone-patches/v4/* ; do patch -p1 < $$PATCH ; done ; \
+else
+		cd capstone ; for PATCH in ../capstone-patches/v5/* ; do patch -p1 < $$PATCH ; done ; \
+endif
 	fi
 endif
 	mkdir -p capstone/include/capstone
@@ -312,7 +255,7 @@ ifneq (${EXT_AR},a)
 endif
 endif
 ../../radare2-webui:
-	cd ../.. ; git clone --depth 1 https://github.com/radare/radare2-webui
+	cd ../.. ; git clone --depth 1 https://github.com/radareorg/radare2-webui
 
 ../../radare2-webui/dist/m: ../../radare2-webui
 ifeq ($(WITHOUT_PULL),1)
@@ -361,18 +304,26 @@ SHLRS+=grub/libgrubfs.a
 SHLRS+=java/libr_java.a
 SHLRS+=lz4/liblz4.a
 SHLRS+=qnx/lib/libqnxr.a
-#SHLRS+=sdb/src/libsdb.a
-#SHLRS+=tcc/libr_tcc.a
-SHLRS+=windbg/libr_windbg.a
+SHLRS+=yxml/libyxml.a
+SHLRS+=winkd/libr_winkd.a
 SHLRS+=zip/librz.a
 
 libr_shlr.${EXT_AR}:
 	rm -rf .libr
 	mkdir .libr
+ifeq ($(CC),emcc)
+	for LIB in ${SHLRS} ; do \
+		if [ -f "$${LIB}" ]; then emcc -emit-llvm -nostdlib -Wl,--whole-archive -o .libr/$$(basename $${LIB}.a).o $${LIB} ; fi ; \
+	done
+	${AR} rs $@ .libr/*.o
+	$(RANLIB) $@
+else
 	for LIB in ${SHLRS} ; do \
 		if [ -f "$${LIB}" ]; then ${PARTIALLD} -o .libr/$$(basename $${LIB}.a).o $${LIB} ; fi ; \
 	done
-	${AR} crs $@ .libr/*.o
+	${AR} rs $@ .libr/*.o
+	$(RANLIB) $@
+endif
 
 .PHONY: spp
 

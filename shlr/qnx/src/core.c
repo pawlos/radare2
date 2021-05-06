@@ -96,13 +96,14 @@ static registers_t arm32[] = {
 	{"cpsr", 172, 4},
 	{"", 0, 0}};
 
-int qnxr_init (libqnxr_t *g) {
-	if (!g) return -1;
+int qnxr_init(libqnxr_t *g) {
+	r_return_val_if_fail (g, -1);
 	memset (g, 0, sizeof (libqnxr_t));
 	g->send_len = 0;
 	g->send_buff = (char *)calloc (DS_DATA_MAX_SIZE * 2, 1);
-	if (!g->send_buff)
+	if (!g->send_buff) {
 		return -1;
+	}
 	g->read_buff = (char *)calloc (DS_DATA_MAX_SIZE * 2, 1);
 	if (!g->read_buff) {
 		R_FREE (g->send_buff);
@@ -112,8 +113,10 @@ int qnxr_init (libqnxr_t *g) {
 	return 0;
 }
 
-int qnxr_set_architecture (libqnxr_t *g, ut8 architecture) {
-	if (!g) return -1;
+int qnxr_set_architecture(libqnxr_t *g, ut8 architecture) {
+	if (!g) {
+		return -1;
+	}
 	g->architecture = architecture;
 	switch (architecture) {
 	case ARCH_X86_32:
@@ -128,15 +131,15 @@ int qnxr_set_architecture (libqnxr_t *g, ut8 architecture) {
 	return 0;
 }
 
-int qnxr_cleanup (libqnxr_t *g) {
-	if (!g) return -1;
+int qnxr_cleanup(libqnxr_t *g) {
+	r_return_val_if_fail (g, -1);
 	free (g->send_buff);
 	g->send_len = 0;
 	free (g->read_buff);
 	return 0;
 }
 
-int qnxr_connect (libqnxr_t *g, const char *host, int port) {
+int qnxr_connect(libqnxr_t *g, const char *host, int port) {
 	char tmp[255];
 	int ret;
 	if (!g || !host || g->connected) return -1;
@@ -193,8 +196,8 @@ int qnxr_connect (libqnxr_t *g, const char *host, int port) {
 	return 0;
 }
 
-int qnxr_disconnect (libqnxr_t *g) {
-	if (!g) return -1;
+int qnxr_disconnect(libqnxr_t *g) {
+	r_return_val_if_fail (g, -1);
 
 	if (g->connected) {
 		nto_send_init (g, DStMsg_disconnect, 0, SET_CHANNEL_DEBUG);
@@ -210,6 +213,7 @@ int qnxr_disconnect (libqnxr_t *g) {
 }
 
 ptid_t qnxr_attach (libqnxr_t *g, pid_t pid) {
+	r_return_val_if_fail (g, null_ptid);
 
 	if (g->inferior_ptid.pid != pid) {
 		qnxr_disconnect (g);
@@ -241,7 +245,7 @@ ptid_t qnxr_run (libqnxr_t *g, const char *file, char **args, char **env) {
 	char **argv, *p;
 	int errors = 0;
 
-	if (!g) return null_ptid;
+	r_return_val_if_fail (g, null_ptid);
 
 	nto_send_init (g, DStMsg_env, DSMSG_ENV_CLEARENV, SET_CHANNEL_DEBUG);
 	nto_send (g, sizeof (DStMsg_env_t), 1);
@@ -250,7 +254,7 @@ ptid_t qnxr_run (libqnxr_t *g, const char *file, char **args, char **env) {
 		errors += !nto_send_env (g, *env);
 
 	if (errors) {
-		eprintf ("%s: error(s) occured while sending environment\n", __func__);
+		eprintf ("%s: error(s) occurred while sending environment\n", __func__);
 	}
 
 	nto_send_init (g, DStMsg_env, DSMSG_ENV_CLEARARGV, SET_CHANNEL_DEBUG);
@@ -271,7 +275,7 @@ ptid_t qnxr_run (libqnxr_t *g, const char *file, char **args, char **env) {
 			errors |= !nto_send_arg (g, *argv);
 
 		if (errors) {
-			eprintf ("%s: error(s) occured while sending args\n", __func__);
+			eprintf ("%s: error(s) occurred while sending args\n", __func__);
 		}
 	}
 
@@ -308,7 +312,7 @@ ptid_t qnxr_run (libqnxr_t *g, const char *file, char **args, char **env) {
 	return null_ptid;
 }
 
-int qnxr_read_registers (libqnxr_t *g) {
+int qnxr_read_registers(libqnxr_t *g) {
 	int i = 0;
 	int len, rlen, regset;
 	int n = 0;
@@ -689,7 +693,7 @@ int nto_send_env (libqnxr_t *g, const char *env) {
 			if (!nto_send (g, offsetof (DStMsg_env_t, data) +
 						  DS_DATA_MAX_SIZE,
 				       1)) {
-				/* An error occured.  */
+				/* An error occurred.  */
 				return 0;
 			}
 			len -= DS_DATA_MAX_SIZE;
@@ -712,7 +716,7 @@ int nto_send_arg (libqnxr_t *g, const char *arg) {
 	if (!g) return 0;
 
 	len = strlen (arg) + 1;
-	if (len > DS_DATA_MAX_SIZE) {
+	if (len > DS_DATA_MAX_SIZE - 4) {
 		eprintf ("Argument too long: %.40s...\n", arg);
 		return 0;
 	}

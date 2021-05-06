@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #ifndef R2_SYSCALL_H
 #define R2_SYSCALL_H
@@ -14,10 +14,6 @@ extern "C" {
 R_LIB_VERSION_HEADER (r_syscall);
 
 #define R_SYSCALL_ARGS 7
-
-typedef struct r_syscall_regs_t {
-	const char *arg[R_SYSCALL_ARGS];
-} RSyscallRegs;
 
 typedef struct r_syscall_item_t {
 	char *name;
@@ -40,7 +36,6 @@ typedef struct r_syscall_t {
 	int bits;
 	char *cpu;
 	// database
-	RSyscallRegs *regs;
 	RSyscallItem *sysptr;
 	RSyscallPort *sysport;
 	Sdb *db;
@@ -98,7 +93,6 @@ R_API bool r_syscall_setup(RSyscall *s, const char *arch, int bits, const char *
 R_API RSyscallItem *r_syscall_get(RSyscall *ctx, int num, int swi);
 R_API int r_syscall_get_num(RSyscall *ctx, const char *str);
 R_API const char *r_syscall_get_i(RSyscall *ctx, int num, int swi);
-R_API const char *r_syscall_reg(RSyscall *s, int idx, int num);
 R_API const char* r_syscall_sysreg(RSyscall *s, const char *type, ut64 num);
 R_API RList *r_syscall_list(RSyscall *ctx);
 R_API int r_syscall_get_swi(RSyscall *s);

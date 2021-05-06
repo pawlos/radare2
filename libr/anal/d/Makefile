@@ -26,11 +26,13 @@ F+= cc-arm-64
 F+= cc-arm-32
 F+= cc-arm-16
 F+= cc-avr-8
-F+= cc-powerpc-32
-F+= cc-powerpc-64
+F+= cc-ppc-32
+F+= cc-ppc-64
 F+= cc-xtensa-32
 F+= cc-riscv-64
 F+= cc-hexagon-32
+F+= cc-v850-32
+F+= cc-s390-64
 
 WIN_TYPES=
 WIN_TYPES+= bcrypt

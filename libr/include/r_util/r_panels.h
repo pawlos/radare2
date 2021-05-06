@@ -6,9 +6,9 @@ extern "C" {
 #endif
 
 typedef enum {
-	VERTICAL,
-	HORIZONTAL,
-	NONE
+	PANEL_LAYOUT_VERTICAL,
+	PANEL_LAYOUT_HORIZONTAL,
+	PANEL_LAYOUT_NONE
 } RPanelLayout;
 
 typedef enum {
@@ -17,11 +17,10 @@ typedef enum {
 } RPanelType;
 
 typedef enum {
-	PANEL_EDGE_NONE,
-	PANEL_EDGE_RIGHT,
-	PANEL_EDGE_BOTTOM
+	PANEL_EDGE_NONE = 0,
+	PANEL_EDGE_BOTTOM,
+	PANEL_EDGE_RIGHT
 } RPanelEdge;
-
 
 typedef void (*RPanelMenuUpdateCallback)(void *user, const char *parent);
 typedef void (*RPanelDirectionCallback)(void *user, int direction);
@@ -60,7 +59,7 @@ typedef struct r_panel_view_t {
 	int sy;
 	int curpos;
 	bool refresh;
-	int edgeflag;
+	int edge;
 } RPanelView;
 
 typedef struct r_panel_t {

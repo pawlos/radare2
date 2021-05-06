@@ -71,10 +71,8 @@ static char *condrets_strtok(char *str, const char tok) {
 }
 
 RAnalEsilOp *esil_get_op (RAnalEsil *esil, const char *op) {
-	r_return_val_if_fail (op && strlen (op) && esil && esil->ops, NULL);
-	char t[128];
-	char *h = sdb_itoa (sdb_hash (op), t, 16);
-	return (RAnalEsilOp *)(size_t)sdb_num_get (esil->ops, h, 0);
+	r_return_val_if_fail (R_STR_ISNOTEMPTY (op) && esil && esil->ops, NULL);
+	return ht_pp_find (esil->ops, op, NULL);
 }
 
 // this little thot atomizes an esil expressions by splitting it on ','
@@ -235,7 +233,6 @@ void _handle_fi_leave (EsilCfgGen *gen, ut32 id, const bool has_next) {
 		r_graph_add_edge (gen->cfg->g, gen->cur, leaving_node);
 		r_rbtree_cont_insert (gen->blocks, leaving_node, _graphnode_esilbb_insert_cmp, NULL);
 		gen->cur = leaving_node;
-		cur_bb = leaving_bb;
 	}
 	r_graph_add_edge (gen->cfg->g, cookie->is_else ? cookie->if_block : cookie->else_block, gen->cur);
 	free (cookie);
@@ -500,7 +497,7 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 	return cfg;
 }
 
-R_API RAnalEsilCFG *r_anal_esil_cfg_new() {
+R_API RAnalEsilCFG *r_anal_esil_cfg_new(void) {
 	RAnalEsilCFG *cf = R_NEW0 (RAnalEsilCFG);
 	if (cf) {
 		RAnalEsilBB *p = R_NEW0 (RAnalEsilBB);

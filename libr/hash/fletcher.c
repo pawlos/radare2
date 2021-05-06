@@ -2,7 +2,7 @@
 
 #include <r_hash.h>
 
-R_API ut16 r_hash_fletcher8(const ut8 *d, size_t length) {
+R_API ut8 r_hash_fletcher8(const ut8 *d, size_t length) {
 	size_t i;
 	ut16 a = 0;
 	ut16 b = 0;
@@ -20,14 +20,14 @@ R_API ut16 r_hash_fletcher16(const ut8 *data, size_t len) {
 	size_t i;
 
 	for (c0 = c1 = 0; len >= 5802; len -= 5802) {
-		for (i = 0; i < 5802; ++i) {
+		for (i = 0; i < 5802; i++) {
 			c0 = c0 + *data++;
 			c1 = c1 + c0;
 		}
 		c0 %= 0xff;
 		c1 %= 0xff;
 	}
-	for (i = 0; i < len; ++i) {
+	for (i = 0; i < len; i++) {
 		c0 += *data++;
 		c1 += c0;
 	}

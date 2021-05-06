@@ -40,6 +40,12 @@ RebuildIOSDebug() {
 	fi
 }
 
+RebuildSpp() {
+	Rebuild shlr/spp
+	Rebuild libr/util
+	Rebuild libr/lang
+}
+
 RebuildJava() {
 	Rebuild shlr/java
 	Rebuild libr/asm
@@ -78,6 +84,12 @@ RebuildGdb() {
 	Rebuild libr/debug
 }
 
+RebuildWinkd() {
+	Rebuild shlr/winkd
+	Rebuild libr/io
+	Rebuild libr/debug
+}
+
 RebuildZip() {
 	Rebuild shlr/zip
 	Rebuild libr/io
@@ -92,6 +104,7 @@ case "$1" in
 grub|fs)RebuildFs; ;;
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
+winkd)  RebuildWinkd ; ;;
 sdb)    RebuildSdb ; ;;
 spp)    RebuildSpp ; ;;
 tcc)    RebuildTcc ; ;;

@@ -643,7 +643,7 @@ aarch64_get_expected_qualifier (const aarch64_opnd_qualifier_seq_t *qseq_list,
       return qseq_list[0][idx];
     }
 
-  for (i = 0, saved_i = -1; i < AARCH64_MAX_QLF_SEQ_NUM; ++i)
+  for (i = 0, saved_i = -1; i < AARCH64_MAX_QLF_SEQ_NUM; i++)
     {
       if (qseq_list[i][known_idx] == known_qlf)
 	{
@@ -811,7 +811,7 @@ dump_qualifier_sequence (const aarch64_opnd_qualifier_t *qualifier)
 {
   int i;
   printf ("####  ");
-  for (i = 0; i < AARCH64_MAX_OPND_NUM; ++i, ++qualifier)
+  for (i = 0; i < AARCH64_MAX_OPND_NUM; i++, ++qualifier)
     printf ("%s,", aarch64_get_qualifier_name (*qualifier));
   printf ("\n");
 }
@@ -824,7 +824,7 @@ dump_match_qualifiers (const struct aarch64_opnd_info *opnd,
   aarch64_opnd_qualifier_t curr[AARCH64_MAX_OPND_NUM];
 
   aarch64_verbose ("dump_match_qualifiers:");
-  for (i = 0; i < AARCH64_MAX_OPND_NUM; ++i)
+  for (i = 0; i < AARCH64_MAX_OPND_NUM; i++)
     curr[i] = opnd[i].qualifier;
   dump_qualifier_sequence (curr);
   aarch64_verbose ("against");
@@ -1715,13 +1715,13 @@ operand_general_constraint_met_p (const aarch64_opnd_info *opnds, int idx,
 	     different from that of the source register size,
 	     e.g. in strb/ldrb.  */
 	  size = aarch64_get_qualifier_esize (qualifier);
-	  if (!value_in_range_p (opnd->addr.offset.imm, 0, 4095 * size))
+	  if (!value_in_range_p (imm, 0, 4095 * size))
 	    {
 	      set_offset_out_of_range_error (mismatch_detail, idx,
 					     0, 4095 * size);
 	      return 0;
 	    }
-	  if (!value_aligned_p (opnd->addr.offset.imm, size))
+	  if (!value_aligned_p (imm, size))
 	    {
 	      set_unaligned_error (mismatch_detail, idx, size);
 	      return 0;

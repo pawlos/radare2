@@ -2,7 +2,7 @@
 
 #include <r_asm.h>
 #include <r_lib.h>
-#include <capstone/capstone.h>
+#include "cs_version.h"
 
 #ifdef CAPSTONE_M68K_H
 #define CAPSTONE_HAS_M68K 1
@@ -107,7 +107,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 	if (op && buf_asm) {
 		char *p = r_str_replace (strdup (buf_asm), "$", "0x", true);
 		if (p) {
-			r_str_rmch (p, '#');
+			r_str_replace_char (p, '#', 0);
 			r_asm_op_set_asm (op, p);
 			free (p);
 		}
@@ -126,7 +126,7 @@ beach:
 
 RAsmPlugin r_asm_plugin_m68k_cs = {
 	.name = "m68k",
-	.desc = "Capstone M68K disassembler",
+	.desc = "Capstone "CAPSTONE_VERSION_STRING" M68K disassembler",
 	.cpus = "68000,68010,68020,68030,68040,68060",
 	.license = "BSD",
 	.arch = "m68k",

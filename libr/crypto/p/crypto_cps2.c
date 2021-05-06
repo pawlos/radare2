@@ -478,7 +478,7 @@ static void expand_1st_key(ut32 *dstkey, const ut32 *srckey) {
 	dstkey[2] = 0;
 	dstkey[3] = 0;
 
-	for (i = 0; i < 96; ++i) {
+	for (i = 0; i < 96; i++) {
 		dstkey[i / 24] |= BIT (srckey[bits[i] / 32], bits[i] % 32) << (i % 24);
 	}
 }
@@ -511,7 +511,7 @@ static void expand_2nd_key(ut32 *dstkey, const ut32 *srckey) {
 	dstkey[2] = 0;
 	dstkey[3] = 0;
 
-	for (i = 0; i < 96; ++i) {
+	for (i = 0; i < 96; i++) {
 		dstkey[i / 24] |= BIT(srckey[bits[i] / 32], bits[i] % 32) << (i % 24);
 	}
 }
@@ -532,7 +532,7 @@ static void expand_subkey(ut32* subkey, ut16 seed) {
 	subkey[0] = 0;
 	subkey[1] = 0;
 
-	for (i = 0; i < 64; ++i) {
+	for (i = 0; i < 64; i++) {
 		subkey[i / 32] |= BIT(seed, bits[i]) << (i % 32);
 	}
 }
@@ -571,7 +571,7 @@ static inline ut16 feistel(ut16 val, const int *bitsA, const int *bitsB,
 
 static int extract_inputs(ut32 val, const int *inputs) {
 	int i, res = 0;
-	for (i = 0; i < 6; ++i) {
+	for (i = 0; i < 6; i++) {
 		if (inputs[i] != -1) {
 			res |= BIT (val, inputs[i]) << i;
 		}
@@ -582,13 +582,13 @@ static int extract_inputs(ut32 val, const int *inputs) {
 static void optimise_sboxes(struct optimised_sbox* out, const struct sbox* in) {
 	int i, box;
 
-	for (box = 0; box < 4; ++box) {
+	for (box = 0; box < 4; box++) {
 		// precalculate the input lookup
-		for (i = 0; i < 256; ++i) {
+		for (i = 0; i < 256; i++) {
 			out[box].input_lookup[i] = extract_inputs(i, in[box].inputs);
 		}
 		// precalculate the output masks
-		for (i = 0; i < 64; ++i) {
+		for (i = 0; i < 64; i++) {
 			int o = in[box].table[i];
 			out[box].output[i] = 0;
 			if (o & 1) {
@@ -629,7 +629,7 @@ static void cps2_crypt(int dir, const ut16 *rom, ut16 *dec, int length, const ut
 	key1[2] ^= BIT(key1[2], 1) <<  5;
 	key1[2] ^= BIT(key1[2], 8) << 11;
 
-	for (i = 0; i < 0x10000; ++i) {
+	for (i = 0; i < 0x10000; i++) {
 		int a;
 		ut16 seed;
 		ut32 subkey[2];
@@ -717,11 +717,24 @@ static ut32 cps2key[2] = {0};
 
 static bool set_key(RCrypto *cry, const ut8 *key, int keylen, int mode, int direction) {
 	cry->dir = direction;
-	if (keylen == 8) {
+	if (keylen == 8) { // old hardcoded MAME keys
 		/* fix key endianness */
-		const ut32 *key32 = (const ut32*)key;
-		cps2key[0] = r_read_be32 (key32);
-		cps2key[1] = r_read_be32 (key32 + 1);
+		const ut32* key32 = (const ut32*)key;
+		cps2key[0] = r_read_be32(key32);
+		cps2key[1] = r_read_be32(key32 + 1);
+		return true;
+	} else if (keylen == 20) {
+		const ut8* key8 = (const ut8*)key;
+		unsigned short decoded[10] = {0};
+		int b;
+		for (b = 0; b < 10 * 16; b++) {
+			int bit = (317 - b) % 160;
+			if ((key8[bit / 8] >> ((bit ^ 7) % 8)) & 1)	{
+				decoded[b / 16] |= (0x8000 >> (b % 16));
+			}
+		}
+		cps2key[0] = ((uint32_t)decoded[0] << 16) | decoded[1];
+		cps2key[1] = ((uint32_t)decoded[2] << 16) | decoded[3];
 		return true;
 	}
 	return false;

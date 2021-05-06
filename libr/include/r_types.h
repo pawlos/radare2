@@ -1,10 +1,15 @@
 #ifndef R2_TYPES_H
 #define R2_TYPES_H
 
+#undef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+
 // defines like IS_DIGIT, etc'
 #include "r_util/r_str_util.h"
 #include <r_userconf.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <assert.h>
 
 // TODO: fix this to make it crosscompile-friendly: R_SYS_OSTYPE ?
 /* operating system */
@@ -24,11 +29,13 @@
 #define R_MODE_EQUAL 0x080
 
 #define R_IN /* do not use, implicit */
-#define R_OWN /* pointer ownership is transferred */
 #define R_OUT /* parameter is written, not read */
 #define R_INOUT /* parameter is read and written */
-#define R_NONNULL /* nonnull */
+#define R_OWN /* pointer ownership is transferred */
+#define R_BORROW /* pointer ownership is not transferred, it must not be freed by the receiver */
+#define R_NONNULL /* pointer can not be null */
 #define R_NULLABLE /* pointer can be null */
+#define R_DEPRECATE /* should not be used in new code and should/will be removed in the future */
 #define R_IFNULL(x) /* default value for the pointer when null */
 #ifdef __GNUC__
 #define R_UNUSED __attribute__((__unused__))
@@ -65,6 +72,7 @@
 #define R_PERM_ACCESS	32
 #define R_PERM_CREAT	64
 
+
 // HACK to fix capstone-android-mips build
 #undef mips
 #define mips mips
@@ -72,6 +80,12 @@
 #if defined(__powerpc) || defined(__powerpc__)
 #undef __POWERPC__
 #define __POWERPC__ 1
+#endif
+
+#if defined(__APPLE__) && (__arm__ || __arm64__ || __aarch64__)
+#define TARGET_OS_IPHONE 1
+#else
+#define TARGET_OS_IPHONE 0
 #endif
 
 #if __IPHONE_8_0 && TARGET_OS_IPHONE
@@ -104,6 +118,12 @@
 #define LIBC_HAVE_PLEDGE 0
 #endif
 
+#if __sun
+#define LIBC_HAVE_PRIV_SET 1
+#else
+#define LIBC_HAVE_PRIV_SET 0
+#endif
+
 #ifdef __GNUC__
 #  define UNUSED_FUNCTION(x) __attribute__((__unused__)) UNUSED_ ## x
 #else
@@ -134,7 +154,7 @@
   static inline struct tm *gmtime_r(const time_t *t, struct tm *r) { return (gmtime_s(r, t))? NULL : r; }
 #endif
 
-#if defined(EMSCRIPTEN) || defined(__linux__) || defined(__APPLE__) || defined(__GNU__) || defined(__ANDROID__) || defined(__QNX__) || defined(__sun)
+#if defined(EMSCRIPTEN) || defined(__linux__) || defined(__APPLE__) || defined(__GNU__) || defined(__ANDROID__) || defined(__QNX__) || defined(__sun) || defined(__HAIKU__)
   #define __BSD__ 0
   #define __UNIX__ 1
 #endif
@@ -146,6 +166,7 @@
   #ifdef _MSC_VER
   /* Must be included before windows.h */
   #include <winsock2.h>
+  #include <ws2tcpip.h>
   #ifndef WIN32_LEAN_AND_MEAN
   #define WIN32_LEAN_AND_MEAN
   #endif
@@ -159,12 +180,6 @@
 #if __WINDOWS__ || _WIN32
   #define __addr_t_defined
   #include <windows.h>
-#endif
-
-#if defined(__APPLE__) && (__arm__ || __arm64__ || __aarch64__)
-#define TARGET_OS_IPHONE 1
-#else
-#define TARGET_OS_IPHONE 0
 #endif
 
 #ifdef __GNUC__
@@ -195,6 +210,13 @@
   #define FUNC_ATTR_USED
   #define FUNC_ATTR_WARN_UNUSED_RESULT
   #define FUNC_ATTR_ALWAYS_INLINE
+#endif
+
+/* printf format check attributes */
+#if defined(__clang__) || defined(__GNUC__)
+#define R_PRINTF_CHECK(fmt, dots) __attribute__ ((format (printf, fmt, dots)))
+#else
+#define R_PRINTF_CHECK(fmt, dots)
 #endif
 
 #include <r_types_base.h>
@@ -242,7 +264,7 @@ extern "C" {
 #define __packed __attribute__((__packed__))
 #endif
 
-typedef int (*PrintfCallback)(const char *str, ...);
+typedef int (*PrintfCallback)(const char *str, ...) R_PRINTF_CHECK(1, 2);
 
 /* compile-time introspection helpers */
 #define CTO(y,z) ((size_t) &((y*)0)->z)
@@ -281,7 +303,7 @@ typedef int (*PrintfCallback)(const char *str, ...);
 #define R_LIB_VERSION_HEADER(x) \
 R_API const char *x##_version(void)
 #define R_LIB_VERSION(x) \
-R_API const char *x##_version() { return "" R2_GITTAP; }
+R_API const char *x##_version(void) { return "" R2_GITTAP; }
 
 #define BITS2BYTES(x) (((x)/8)+(((x)%8)?1:0))
 #define ZERO_FILL(x) memset (&x, 0, sizeof (x))
@@ -347,11 +369,15 @@ static inline void *r_new_copy(int size, void *data) {
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/time.h>
+#ifdef __HAIKU__
+// Original macro cast it to clockid_t
+#undef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 0
+#endif
 #endif
 
 #ifndef HAVE_EPRINTF
 #define eprintf(...) fprintf(stderr,__VA_ARGS__)
-#define eprint(x) fprintf(stderr,"%s\n",x)
 #define HAVE_EPRINTF 1
 #endif
 
@@ -369,19 +395,6 @@ static inline void *r_new_copy(int size, void *data) {
 #endif
 #endif
 
-#define R_BETWEEN(x,y,z) (((y)>=(x)) && ((y)<=(z)))
-#define R_ROUND(x,y) ((x)%(y))?(x)+((y)-((x)%(y))):(x)
-#define R_DIM(x,y,z) (((x)<(y))?(y):((x)>(z))?(z):(x))
-#ifndef R_MAX_DEFINED
-#define R_MAX(x,y) (((x)>(y))?(x):(y))
-#define R_MAX_DEFINED
-#endif
-#ifndef R_MIN_DEFINED
-#define R_MIN(x,y) (((x)>(y))?(y):(x))
-#define R_MIN_DEFINED
-#endif
-#define R_ABS(x) (((x)<0)?-(x):(x))
-#define R_BTW(x,y,z) (((x)>=(y))&&((y)<=(z)))?y:x
 
 #define R_FREE(x) { free((void *)x); x = NULL; }
 
@@ -414,6 +427,8 @@ static inline void *r_new_copy(int size, void *data) {
 #define LDBLFMT "Lf"
 #define HHXFMT  "hhx"
 #endif
+
+#define PFMTDPTR "td"
 
 #define PFMT32x "x"
 #define PFMT32d "d"
@@ -479,6 +494,10 @@ static inline void *r_new_copy(int size, void *data) {
 #define R_SYS_ARCH "arc"
 #define R_SYS_BITS R_SYS_BITS_32
 #define R_SYS_ENDIAN 0
+#elif __s390x__
+#define R_SYS_ARCH "sysz"
+#define R_SYS_BITS R_SYS_BITS_64
+#define R_SYS_ENDIAN 1
 #elif __sparc__
 #define R_SYS_ARCH "sparc"
 #define R_SYS_BITS R_SYS_BITS_32
@@ -524,41 +543,42 @@ static inline void *r_new_copy(int size, void *data) {
 #define R_SYS_ENDIAN_BIG 2
 #define R_SYS_ENDIAN_BI 3
 
-enum {
+typedef enum {
 	R_SYS_ARCH_NONE = 0,
-	R_SYS_ARCH_X86 = 0x1,
-	R_SYS_ARCH_ARM = 0x2,
-	R_SYS_ARCH_PPC = 0x4,
-	R_SYS_ARCH_M68K = 0x8,
-	R_SYS_ARCH_JAVA = 0x10,
-	R_SYS_ARCH_MIPS = 0x20,
-	R_SYS_ARCH_SPARC = 0x40,
-	R_SYS_ARCH_XAP = 0x80,
-	R_SYS_ARCH_MSIL = 0x100,
-	R_SYS_ARCH_OBJD = 0x200,
-	R_SYS_ARCH_BF = 0x400,
-	R_SYS_ARCH_SH = 0x800,
-	R_SYS_ARCH_AVR = 0x1000,
-	R_SYS_ARCH_DALVIK = 0x2000,
-	R_SYS_ARCH_Z80 = 0x4000,
-	R_SYS_ARCH_ARC = 0x8000,
-	R_SYS_ARCH_I8080 = 0x10000,
-	R_SYS_ARCH_RAR = 0x20000,
-	R_SYS_ARCH_8051 = 0x40000,
-	R_SYS_ARCH_TMS320 = 0x80000,
-	R_SYS_ARCH_EBC = 0x100000,
-	R_SYS_ARCH_H8300 = 0x200000,
-	R_SYS_ARCH_CR16 = 0x400000,
-	R_SYS_ARCH_V850 = 0x800000,
-	R_SYS_ARCH_SYSZ = 0x1000000,
-	R_SYS_ARCH_XCORE = 0x2000000,
-	R_SYS_ARCH_PROPELLER = 0x4000000,
-	R_SYS_ARCH_MSP430 = 0x8000000LL, // 1<<27
-	R_SYS_ARCH_CRIS =  0x10000000LL, // 1<<28
-	R_SYS_ARCH_HPPA =  0x20000000LL, // 1<<29
-	R_SYS_ARCH_V810 =  0x40000000LL, // 1<<30
-	R_SYS_ARCH_LM32 =  0x80000000LL, // 1<<31
-};
+	R_SYS_ARCH_X86,
+	R_SYS_ARCH_ARM,
+	R_SYS_ARCH_PPC,
+	R_SYS_ARCH_M68K,
+	R_SYS_ARCH_JAVA,
+	R_SYS_ARCH_MIPS,
+	R_SYS_ARCH_SPARC,
+	R_SYS_ARCH_XAP,
+	R_SYS_ARCH_MSIL,
+	R_SYS_ARCH_OBJD,
+	R_SYS_ARCH_BF,
+	R_SYS_ARCH_SH,
+	R_SYS_ARCH_AVR,
+	R_SYS_ARCH_DALVIK,
+	R_SYS_ARCH_Z80,
+	R_SYS_ARCH_ARC,
+	R_SYS_ARCH_I8080,
+	R_SYS_ARCH_RAR,
+	R_SYS_ARCH_8051,
+	R_SYS_ARCH_TMS320,
+	R_SYS_ARCH_EBC,
+	R_SYS_ARCH_H8300,
+	R_SYS_ARCH_CR16,
+	R_SYS_ARCH_V850,
+	R_SYS_ARCH_S390,
+	R_SYS_ARCH_XCORE,
+	R_SYS_ARCH_PROPELLER,
+	R_SYS_ARCH_MSP430,
+	R_SYS_ARCH_CRIS,
+	R_SYS_ARCH_HPPA,
+	R_SYS_ARCH_V810,
+	R_SYS_ARCH_LM32,
+	R_SYS_ARCH_RISCV
+} RSysArch;
 
 #if HAVE_CLOCK_NANOSLEEP && CLOCK_MONOTONIC && (__linux__ || (__FreeBSD__ && __FreeBSD_version >= 1101000) || (__NetBSD__ && __NetBSD_Version__ >= 700000000))
 #define HAS_CLOCK_NANOSLEEP 1
@@ -583,6 +603,8 @@ enum {
 #define R_SYS_OS "openbsd"
 #elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
 #define R_SYS_OS "freebsd"
+#elif defined (__HAIKU__)
+#define R_SYS_OS "haiku"
 #else
 #define R_SYS_OS "unknown"
 #endif
@@ -648,5 +670,18 @@ static inline void r_run_call10(void *fcn, void *arg1, void *arg2, void *arg3, v
 #  define container_of(ptr, type, member) ((type *)((char *)(__typeof__(((type *)0)->member) *){ptr} - offsetof(type, member)))
 # endif
 #endif
+
+// reference counter
+typedef int RRef;
+
+#define R_REF_NAME refcount
+#define r_ref(x) x->R_REF_NAME++;
+#define r_ref_init(x) x->R_REF_NAME = 1
+#define r_unref(x,f) { assert (x->R_REF_NAME> 0); if (!--(x->R_REF_NAME)) { f(x); } }
+
+#define R_REF_TYPE RRef R_REF_NAME
+#define R_REF_FUNCTIONS(s, n) \
+static inline void n##_ref(s *x) { x->R_REF_NAME++; } \
+static inline void n##_unref(s *x) { r_unref (x, n##_free); }
 
 #endif // R2_TYPES_H

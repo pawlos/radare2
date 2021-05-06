@@ -1,10 +1,11 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2020 - pancake, nibble */
 
 #include <r_anal.h>
 #include <r_util.h>
 #include <r_list.h>
 #include <r_io.h>
 #include <config.h>
+#include "../config.h"
 
 R_LIB_VERSION(r_anal);
 
@@ -61,58 +62,18 @@ static void zign_rename_for(REvent *ev, int type, void *user, void *data) {
 		se->data.rename.oldname, se->data.rename.newname);
 }
 
-static int __anal_hint_range_tree_cmp(const void *a_, const RBNode *b_, void *user) {
-	const RAnalRange *a = a_;
-	const RAnalRange *b = container_of (b_, const RAnalRange, rb);
-	if (a && b) {
-		ut64 from0 = a->from, from1 = b->from;
-		return from0 < from1 ? -1 : 1;
-	}
-	return 0;
+void r_anal_hint_storage_init(RAnal *a);
+void r_anal_hint_storage_fini(RAnal *a);
+
+static void r_meta_item_fini(RAnalMetaItem *item) {
+	free (item->str);
 }
 
-static void __anal_hint_range_tree_free(RBNode *node) {
-	free (container_of (node, RAnalRange, rb));
-}
-
-
-static RAnalRange *__anal_range_hint_tree_find_at(RBNode *node, ut64 addr) {
-	while (node) {
-		RAnalRange *range = container_of (node, RAnalRange, rb);
-		if (range->from == addr) {
-			return range;
-		}
-		node = node->child[range->from < addr];
-	}
-	return NULL;
-}
-
-static void __anal_range_hint_tree_insert(RBNode **root, RAnalRange *range) {
-	r_rbtree_aug_insert (root, range, &(range->rb),
-			     __anal_hint_range_tree_cmp,
-			     NULL, NULL);
-}
-
-static void __anal_add_range_on_hints(RAnal *a, ut64 addr, int bits) {
-	r_return_if_fail (a);
-	//do we have already a node with that addr? if yes then update its bits
-	RAnalRange *range = __anal_range_hint_tree_find_at (a->rb_hints_ranges, addr);
-	if (range) {
-		range->bits = bits;
-	} else {
-		//otherwise insert new range into the tree
-		range = R_NEW0 (RAnalRange);
-		if (range) {
-			range->bits = bits;
-			range->from = addr;
-			__anal_range_hint_tree_insert (&a->rb_hints_ranges, range);
-		}
-	}
-}
-
-static void __anal_hint_on_bits(RAnal *a, ut64 addr, int bits, bool set) {
-	if (set) {
-		__anal_add_range_on_hints (a, addr, bits);
+static void r_meta_item_free(void *_item) {
+	if (_item) {
+		RAnalMetaItem *item = _item;
+		r_meta_item_fini (item);
+		free (item);
 	}
 }
 
@@ -122,11 +83,15 @@ R_API RAnal *r_anal_new(void) {
 	if (!anal) {
 		return NULL;
 	}
-	anal->consts = NULL;
+	if (!r_str_constpool_init (&anal->constpool)) {
+		free (anal);
+		return NULL;
+	}
+	anal->bb_tree = NULL;
+	anal->ht_addr_fun = ht_up_new0 ();
+	anal->ht_name_fun = ht_pp_new0 ();
 	anal->os = strdup (R_SYS_OS);
-	anal->reflines = NULL;
 	anal->esil_goto_limit = R_ANAL_ESIL_GOTO_LIMIT;
-	anal->limit = NULL;
 	anal->opt.nopskip = true; // skip nops in code analysis
 	anal->opt.hpskip = false; // skip `mov reg,reg` and `lea reg,[reg]`
 	anal->gp = 0LL;
@@ -142,10 +107,8 @@ R_API RAnal *r_anal_new(void) {
 	r_event_hook (anal->zign_spaces.event, R_SPACE_EVENT_UNSET, zign_unset_for, NULL);
 	r_event_hook (anal->zign_spaces.event, R_SPACE_EVENT_COUNT, zign_count_for, NULL);
 	r_event_hook (anal->zign_spaces.event, R_SPACE_EVENT_RENAME, zign_rename_for, NULL);
-	anal->sdb_fcns = sdb_ns (anal->sdb, "fcns", 1);
-	anal->sdb_meta = sdb_ns (anal->sdb, "meta", 1);
-	anal->sdb_hints = sdb_ns (anal->sdb, "hints", 1);
-	anal->hint_cbs.on_bits = __anal_hint_on_bits;
+	r_anal_hint_storage_init (anal);
+	r_interval_tree_init (&anal->meta, r_meta_item_free);
 	anal->sdb_types = sdb_ns (anal->sdb, "types", 1);
 	anal->sdb_fmts = sdb_ns (anal->sdb, "spec", 1);
 	anal->sdb_cc = sdb_ns (anal->sdb, "cc", 1);
@@ -164,12 +127,10 @@ R_API RAnal *r_anal_new(void) {
 	anal->reg = r_reg_new ();
 	anal->last_disasm_reg = NULL;
 	anal->stackptr = 0;
-	anal->rb_hints_ranges = NULL;
 	anal->lineswidth = 0;
-	anal->fcns = r_anal_fcn_list_new ();
-	anal->fcn_tree = NULL;
-	anal->fcn_addr_tree = NULL;
-	anal->refs = r_anal_ref_list_new ();
+	anal->fcns = r_list_newf ((RListFree)r_anal_function_free);
+	anal->leaddrs = NULL;
+	anal->imports = r_list_newf (free);
 	r_anal_set_bits (anal, 32);
 	anal->plugins = r_list_newf ((RListFree) r_anal_plugin_free);
 	if (anal->plugins) {
@@ -177,10 +138,8 @@ R_API RAnal *r_anal_new(void) {
 			r_anal_add (anal, anal_static_plugins[i]);
 		}
 	}
-	anal->cmdtail = r_strbuf_new (NULL);
 	return anal;
 }
-
 
 R_API void r_anal_plugin_free (RAnalPlugin *p) {
 	if (p && p->fini) {
@@ -188,43 +147,62 @@ R_API void r_anal_plugin_free (RAnalPlugin *p) {
 	}
 }
 
+void __block_free_rb(RBNode *node, void *user);
+
 R_API RAnal *r_anal_free(RAnal *a) {
 	if (!a) {
 		return NULL;
 	}
 	/* TODO: Free anals here */
+	r_list_free (a->fcns);
+	ht_up_free (a->ht_addr_fun);
+	ht_pp_free (a->ht_name_fun);
 	set_u_free (a->visited);
+	r_anal_hint_storage_fini (a);
+	r_interval_tree_fini (&a->meta);
 	free (a->cpu);
 	free (a->os);
 	free (a->zign_path);
 	r_list_free (a->plugins);
-	a->fcns->free = r_anal_fcn_free;
-	r_list_free (a->fcns);
+	r_rbtree_free (a->bb_tree, __block_free_rb, NULL);
 	r_spaces_fini (&a->meta_spaces);
 	r_spaces_fini (&a->zign_spaces);
 	r_anal_pin_fini (a);
-	r_list_free (a->refs);
 	r_syscall_free (a->syscall);
 	r_reg_free (a->reg);
-	r_anal_op_free (a->queued);
-	r_rbtree_free (a->rb_hints_ranges, __anal_hint_range_tree_free);
 	ht_up_free (a->dict_refs);
 	ht_up_free (a->dict_xrefs);
-	a->sdb = NULL;
-	sdb_ns_free (a->sdb);
+	r_list_free (a->leaddrs);
+	sdb_free (a->sdb);
 	if (a->esil) {
 		r_anal_esil_free (a->esil);
 		a->esil = NULL;
 	}
 	free (a->last_disasm_reg);
-	r_strbuf_free (a->cmdtail);
-	r_str_const_free (&a->consts);
+	r_list_free (a->imports);
+	r_str_constpool_fini (&a->constpool);
 	free (a);
 	return NULL;
 }
 
 R_API void r_anal_set_user_ptr(RAnal *anal, void *user) {
 	anal->user = user;
+}
+
+R_API bool r_anal_esil_use(RAnal *anal, const char *name) {
+	RListIter *it;
+	RAnalEsilPlugin *h;
+
+	if (anal) {
+		r_list_foreach (anal->esil_plugins, it, h) {
+			if (!h->name || strcmp (h->name, name)) {
+				continue;
+			}
+			anal->esil_cur = h;
+			return true;
+		}
+	}
+	return false;
 }
 
 R_API int r_anal_add(RAnal *anal, RAnalPlugin *foo) {
@@ -240,7 +218,6 @@ R_API bool r_anal_use(RAnal *anal, const char *name) {
 	RAnalPlugin *h;
 
 	if (anal) {
-		bool change = anal->cur && strcmp (anal->cur->name, name);
 		r_list_foreach (anal->plugins, it, h) {
 			if (!h->name || strcmp (h->name, name)) {
 				continue;
@@ -253,9 +230,6 @@ R_API bool r_anal_use(RAnal *anal, const char *name) {
 #endif
 			anal->cur = h;
 			r_anal_set_reg_profile (anal);
-			if (change) {
-				r_anal_set_fcnsign (anal, NULL);
-			}
 			return true;
 		}
 	}
@@ -281,27 +255,6 @@ R_API bool r_anal_set_reg_profile(RAnal *anal) {
 		free (p);
 	}
 	return ret;
-}
-
-R_API bool r_anal_set_fcnsign(RAnal *anal, const char *name) {
-	const char *dirPrefix = r_sys_prefix (NULL);
-	const char *arch = (anal->cur && anal->cur->arch) ? anal->cur->arch : R_SYS_ARCH;
-	const char *file = (name && *name)
-		? sdb_fmt (R_JOIN_3_PATHS ("%s", R2_SDB_FCNSIGN, "%s.sdb"), dirPrefix, name)
-		: sdb_fmt (R_JOIN_3_PATHS ("%s", R2_SDB_FCNSIGN, "%s-%s-%d.sdb"), dirPrefix,
-			anal->os, arch, anal->bits);
-	if (r_file_exists (file)) {
-		sdb_close (anal->sdb_fcnsign);
-		sdb_free (anal->sdb_fcnsign);
-		anal->sdb_fcnsign = sdb_new (0, file, 0);
-		sdb_ns_set (anal->sdb, "fcnsign", anal->sdb_fcnsign);
-		return (anal->sdb_fcnsign != NULL);
-	}
-	return false;
-}
-
-R_API const char *r_anal_get_fcnsign(RAnal *anal, const char *sym) {
-	return sdb_const_get (anal->sdb_fcnsign, sym, 0);
 }
 
 R_API bool r_anal_set_triplet(RAnal *anal, const char *os, const char *arch, int bits) {
@@ -349,7 +302,6 @@ R_API bool r_anal_set_bits(RAnal *anal, int bits) {
 	case 64:
 		if (anal->bits != bits) {
 			anal->bits = bits;
-			r_anal_set_fcnsign (anal, NULL);
 			r_anal_set_reg_profile (anal);
 		}
 		return true;
@@ -366,10 +318,12 @@ R_API void r_anal_set_cpu(RAnal *anal, const char *cpu) {
 	}
 }
 
-R_API int r_anal_set_big_endian(RAnal *anal, int bigend) {
+R_API void r_anal_set_big_endian(RAnal *anal, int bigend) {
+	r_return_if_fail (anal);
 	anal->big_endian = bigend;
-	anal->reg->big_endian = bigend;
-	return true;
+	if (anal->reg) {
+		anal->reg->big_endian = bigend;
+	}
 }
 
 R_API ut8 *r_anal_mask(RAnal *anal, int size, const ut8 *data, ut64 at) {
@@ -413,10 +367,10 @@ R_API ut8 *r_anal_mask(RAnal *anal, int size, const ut8 *data, ut64 at) {
 }
 
 R_API void r_anal_trace_bb(RAnal *anal, ut64 addr) {
+	r_return_if_fail (anal);
 	RAnalBlock *bbi;
-	RAnalFunction *fcni;
 	RListIter *iter2;
-	fcni = r_anal_get_fcn_in (anal, addr, 0);
+	RAnalFunction *fcni = r_anal_get_fcn_in (anal, addr, 0);
 	if (fcni) {
 		r_list_foreach (fcni->bbs, iter2, bbi) {
 			if (addr >= bbi->addr && addr < (bbi->addr + bbi->size)) {
@@ -424,14 +378,6 @@ R_API void r_anal_trace_bb(RAnal *anal, ut64 addr) {
 				break;
 			}
 		}
-	}
-}
-
-R_API void r_anal_colorize_bb(RAnal *anal, ut64 addr, ut32 color) {
-	RAnalBlock *bbi;
-	bbi = r_anal_bb_from_offset (anal, addr);
-	if (bbi) {
-		bbi->colorize = color;
 	}
 }
 
@@ -476,21 +422,20 @@ R_API bool r_anal_op_is_eob(RAnalOp *op) {
 	}
 }
 
-R_API int r_anal_purge (RAnal *anal) {
-	sdb_reset (anal->sdb_fcns);
-	sdb_reset (anal->sdb_meta);
-	sdb_reset (anal->sdb_hints);
+R_API void r_anal_purge(RAnal *anal) {
+	r_anal_hint_clear (anal);
+	r_interval_tree_fini (&anal->meta);
+	r_interval_tree_init (&anal->meta, r_meta_item_free);
 	sdb_reset (anal->sdb_types);
 	sdb_reset (anal->sdb_zigns);
 	sdb_reset (anal->sdb_classes);
 	sdb_reset (anal->sdb_classes_attrs);
+	r_anal_pin_fini (anal);
+	r_anal_pin_init (anal);
+	sdb_reset (anal->sdb_cc);
 	r_list_free (anal->fcns);
-	anal->fcns = r_anal_fcn_list_new ();
-	anal->fcn_tree = NULL;
-	anal->fcn_addr_tree = NULL;
-	r_list_free (anal->refs);
-	anal->refs = r_anal_ref_list_new ();
-	return 0;
+	anal->fcns = r_list_newf ((RListFree)r_anal_function_free);
+	r_anal_purge_imports (anal);
 }
 
 R_API int r_anal_archinfo(RAnal *anal, int query) {
@@ -507,7 +452,7 @@ R_API int r_anal_archinfo(RAnal *anal, int query) {
 	return -1;
 }
 
-static int __nonreturn_print_commands(void *p, const char *k, const char *v) {
+static bool __nonreturn_print_commands(void *p, const char *k, const char *v) {
 	RAnal *anal = (RAnal *)p;
 	if (!strncmp (v, "func", strlen ("func") + 1)) {
 		char *query = sdb_fmt ("func.%s.noreturn", k);
@@ -518,10 +463,10 @@ static int __nonreturn_print_commands(void *p, const char *k, const char *v) {
 	if (!strncmp (k, "addr.", 5)) {
 		anal->cb_printf ("tna 0x%s %s\n", k + 5, v);
 	}
-	return 1;
+	return true;
 }
 
-static int __nonreturn_print(void *p, const char *k, const char *v) {
+static bool __nonreturn_print(void *p, const char *k, const char *v) {
 	RAnal *anal = (RAnal *)p;
 	if (!strncmp (k, "func.", 5) && strstr (k, ".noreturn")) {
 		char *s = strdup (k + 5);
@@ -544,7 +489,7 @@ static int __nonreturn_print(void *p, const char *k, const char *v) {
 		}
 		free (off);
 	}
-	return 1;
+	return true;
 }
 
 R_API void r_anal_noreturn_list(RAnal *anal, int mode) {
@@ -569,6 +514,10 @@ R_API bool r_anal_noreturn_add(RAnal *anal, const char *name, ut64 addr) {
 	char *fnl_name = NULL;
 	if (addr != UT64_MAX) {
 		if (sdb_bool_set (TDB, K_NORET_ADDR (addr), true, 0)) {
+			RAnalFunction *fcn = r_anal_get_function_at (anal, addr);
+			if (fcn) {
+				fcn->is_noreturn = true;
+			}
 			return true;
 		}
 	}
@@ -582,6 +531,9 @@ R_API bool r_anal_noreturn_add(RAnal *anal, const char *name, ut64 addr) {
 			return false;
 		}
 		tmp_name = fcn ? fcn->name: fi->name;
+		if (fcn) {
+			fcn->is_noreturn = true;
+		}
 	}
 	if (r_type_func_exist (TDB, tmp_name)) {
 		fnl_name = strdup (tmp_name);
@@ -606,7 +558,7 @@ R_API bool r_anal_noreturn_add(RAnal *anal, const char *name, ut64 addr) {
 
 R_API bool r_anal_noreturn_drop(RAnal *anal, const char *expr) {
 	Sdb *TDB = anal->sdb_types;
-	expr = r_str_trim_ro (expr);
+	expr = r_str_trim_head_ro (expr);
 	const char *fcnname = NULL;
 	if (!strncmp (expr, "0x", 2)) {
 		ut64 n = r_num_math (NULL, expr);
@@ -696,11 +648,14 @@ static bool noreturn_recurse(RAnal *anal, ut64 addr) {
 }
 
 R_API bool r_anal_noreturn_at(RAnal *anal, ut64 addr) {
+	if (!addr || addr == UT64_MAX) {
+		return false;
+	}
 	if (r_anal_noreturn_at_addr (anal, addr)) {
 		return true;
 	}
 	/* XXX this is very slow */
-	RAnalFunction *f = r_anal_get_fcn_at (anal, addr, 0);
+	RAnalFunction *f = r_anal_get_function_at (anal, addr);
 	if (f) {
 		if (r_anal_noreturn_at_name (anal, f->name)) {
 			return true;
@@ -708,7 +663,7 @@ R_API bool r_anal_noreturn_at(RAnal *anal, ut64 addr) {
 	}
 	RFlagItem *fi = anal->flag_get (anal->flb.f, addr);
 	if (fi) {
-		if (r_anal_noreturn_at_name (anal, fi->name)) {
+		if (r_anal_noreturn_at_name (anal, fi->realname ? fi->realname : fi->name)) {
 			return true;
 		}
 	}
@@ -718,78 +673,64 @@ R_API bool r_anal_noreturn_at(RAnal *anal, ut64 addr) {
 	return false;
 }
 
-R_API int r_anal_range_tree_find_bits_at(RBNode *root, ut64 addr) {
-	RAnalRange *tmp = NULL;
-	RBNode *ny;
-	RAnalRange *path[R_RBTREE_MAX_HEIGHT + 1];
-	int i, bits = 0, len = 0;
-	ut64 min_diff = UT64_MAX;
-	if (!root) {
-		return 0;
-	}
-	path[len++] = container_of (root, RAnalRange, rb);
-	ny = root->child[path[0]->from < addr];
-	if (!ny) {
-		return path[0]->bits;
-	}
-	tmp = container_of (ny, RAnalRange, rb);
-	path[len++] = tmp;
-	//build path of RAnalRange
-	while (len < R_RBTREE_MAX_HEIGHT) {
-		ny = ny->child[tmp->from < addr];
-		if (!ny) {
-			break;
-		}
-		tmp = container_of (ny, RAnalRange, rb);
-		path[len++] = tmp;
-	}
-	i = len - 1;
-	//find the nearest RAnalRange
-	while (i >= 0) {
-		ut64 diff = addr - path[i]->from;
-		if ((st64)diff < 0) {
-			i--;
-			continue;
-		}
-		if (diff < min_diff) {
-			bits = path[i]->bits;
-			min_diff = diff;
-		}
-		i--;
-	}
-	return bits;
-}
-
-R_API void r_anal_merge_hint_ranges(RAnal *a) {
-	if (a->merge_hints) {
-		SdbListIter *iter;
-		SdbKv *kv;
-		SdbList *sdb_range = sdb_foreach_list (a->sdb_hints, true);
-		int range_bits = 0;
-		r_rbtree_free (a->rb_hints_ranges, __anal_hint_range_tree_free);
-		a->rb_hints_ranges = NULL;
-		ls_foreach (sdb_range, iter, kv) {
-			ut64 addr = sdb_atoi (sdbkv_key (kv) + 5);
-			int bits = r_anal_hint_get_bits_at (a, addr,  sdbkv_value (kv));
-			if (bits && range_bits == bits) {
-				r_anal_hint_unset_bits (a, addr);
-			} else {
-				RAnalRange *range = R_NEW0 (RAnalRange);
-				range->bits = bits;
-				range->from = addr;
-				__anal_range_hint_tree_insert (&a->rb_hints_ranges, range);
-			}
-			range_bits = bits;
-		}
-		ls_free (sdb_range);
-		a->merge_hints = false;
-	}
-}
-
 R_API void r_anal_bind(RAnal *anal, RAnalBind *b) {
 	if (b) {
 		b->anal = anal;
 		b->get_fcn_in = r_anal_get_fcn_in;
 		b->get_hint = r_anal_hint_get;
 	}
+}
+
+R_API RList *r_anal_preludes(RAnal *anal) {
+	if (anal->cur && anal->cur->preludes ) {
+		return anal->cur->preludes (anal);
+	}
+	return NULL;
+}
+
+R_API bool r_anal_is_prelude(RAnal *anal, const ut8 *data, int len) {
+	RList *l = r_anal_preludes (anal);
+	if (l) {
+		RSearchKeyword *kw;
+		RListIter *iter;
+		r_list_foreach (l, iter, kw) {
+			int ks = kw->keyword_length;
+			if (len >= ks && !memcmp (data, kw->bin_keyword, ks)) {
+				r_list_free (l);
+				return true;
+			}
+		}
+		r_list_free (l);
+	}
+	return false;
+}
+
+R_API void r_anal_add_import(RAnal *anal, const char *imp) {
+	RListIter *it;
+	const char *eimp;
+	r_list_foreach (anal->imports, it, eimp) {
+		if (!strcmp (eimp, imp)) {
+			return;
+		}
+	}
+	char *cimp = strdup (imp);
+	if (!cimp) {
+		return;
+	}
+	r_list_push (anal->imports, cimp);
+}
+
+R_API void r_anal_remove_import(RAnal *anal, const char *imp) {
+	RListIter *it;
+	const char *eimp;
+	r_list_foreach (anal->imports, it, eimp) {
+		if (!strcmp (eimp, imp)) {
+			r_list_delete (anal->imports, it);
+			return;
+		}
+	}
+}
+
+R_API void r_anal_purge_imports(RAnal *anal) {
+	r_list_purge (anal->imports);
 }

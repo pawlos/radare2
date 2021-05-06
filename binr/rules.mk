@@ -1,14 +1,28 @@
 BINR_PROGRAM=1
 include ../../libr/config.mk
 include ../../shlr/zip/deps.mk
+include ../../shlr/sdb.mk
 
 ifeq (,$(findstring tcc,${CC}))
 CFLAGS+=-pie
 endif
 CFLAGS+=-I$(LTOP)/include
 
+ifeq (${ANDROID},1)
+LDFLAGS+=-lm
+else
+ifneq (${OSTYPE},linux)
+LDFLAGS+=-lpthread
+LDFLAGS+=-ldl
+LDFLAGS+=-lm
+endif
+endif
+ifeq ($(USE_LTO),1)
+LDFLAGS+=-flto
+endif
+
 ifeq (${COMPILER},emscripten)
-LINK+=$(SHLR)/libr/libr.a
+LINK+=$(SHLR)/libr_shlr.a
 LINK+=$(SHLR)/sdb/src/libsdb.a
 include $(SHLR)/capstone.mk
 CFLAGS+= -s SIDE_MODULE=1
@@ -63,7 +77,11 @@ ${BINS}: ${OBJS}
 	${CC} ${CFLAGS} $@.c ${OBJS} ../../libr/libr.a -o $@ $(LDFLAGS)
 
 ${BEXE}: ${OBJ} ${SHARED_OBJ}
+ifeq ($(CC),emcc)
+	emcc $(BIN).c ../../shlr/libr_shlr.a ../../shlr/capstone/libcapstone.a ../../libr/libr.a ../../shlr/gdb/lib/libgdbr.a ../../shlr/zip/librz.a -I ../../libr/include -o $(BIN).js
+else
 	${CC} ${CFLAGS} $+ -L.. -o $@ ../../libr/libr.a $(LDFLAGS)
+endif
 else
 
 ${BINS}: ${OBJS}
@@ -91,7 +109,9 @@ clean:: myclean
 mrproper: clean
 	-rm -f *.d
 
+ifeq ($(INSTALL_TARGET),)
 install:
 	cd ../.. && ${MAKE} install
+endif
 
 .PHONY: all clean myclean mrproper install

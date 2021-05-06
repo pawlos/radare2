@@ -34,6 +34,7 @@ static const struct {
 	// {"base91", R_HASH_BASE91},
 	// {"punycode", R_HASH_PUNYCODE},
 	{ "luhn", R_HASH_LUHN },
+	{ "ssdeep", R_HASH_SSDEEP },
 
 	{ "fletcher8", R_HASH_FLETCHER8 },
 	{ "fletcher16", R_HASH_FLETCHER16 },
@@ -214,6 +215,7 @@ R_API int r_hash_size(ut64 algo) {
 	ALGOBIT (MOD255);
 	ALGOBIT (PCPRINT);
 	ALGOBIT (LUHN);
+	ALGOBIT (SSDEEP);
 
 	ALGOBIT (CRC8_SMBUS);
 #if R_HAVE_CRC8_EXTRA
@@ -303,7 +305,7 @@ R_API ut64 r_hash_name_to_bits(const char *name) {
 	do {
 		/* Eat everything up to the comma */
 		for (i = 0; *ptr && *ptr != ',' && i < sizeof (tmp) - 1; i++) {
-			tmp[i] = tolower ((ut8)*ptr++);
+ 			tmp[i] = tolower ((ut8)*ptr++);
 		}
 
 		/* Safety net */

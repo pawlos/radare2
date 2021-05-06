@@ -9,6 +9,7 @@
 #include <sys/ptrace.h>
 #include <asm/ptrace.h>
 #include "linux_coredump.h"
+#include "linux_ptrace.h"
 
 /* For compatibility */
 #if __x86_64__ || __arm64__
@@ -68,7 +69,7 @@ static char *prpsinfo_get_psargs(char *buffer, int len) {
 		paux[i] = buffer[i];
 	}
 	paux[i] = '\0';
-	strncat (p, paux, len - bytes_left - 1);
+	snprintf (p + bytes_left, len - bytes_left, "%s", paux);
 	return p;
 }
 
@@ -78,7 +79,7 @@ static prpsinfo_t *linux_get_prpsinfo(RDebug *dbg, proc_per_process_t *proc_data
 	char *buffer, *pfname = NULL, *ppsargs = NULL, *file = NULL;
 	prpsinfo_t *p;
 	pid_t mypid;
-	int len;
+	size_t len;
 
 	p = R_NEW0 (prpsinfo_t);
 	if (!p) {
@@ -100,15 +101,13 @@ static prpsinfo_t *linux_get_prpsinfo(RDebug *dbg, proc_per_process_t *proc_data
 		goto error;
 	}
 	basename = r_file_basename (pfname);
-	strncpy (p->pr_fname, basename, sizeof (p->pr_fname));
-	p->pr_fname[sizeof (p->pr_fname) - 1] = 0;
-	ppsargs = prpsinfo_get_psargs (buffer, len);
+	r_str_ncpy (p->pr_fname, basename, sizeof (p->pr_fname) - 1);
+	ppsargs = prpsinfo_get_psargs (buffer, (int)len);
 	if (!ppsargs) {
 		goto error;
 	}
 
-	strncpy (p->pr_psargs, ppsargs, sizeof (p->pr_psargs));
-	p->pr_psargs[sizeof (p->pr_psargs)-1] = 0;
+	r_str_ncpy (p->pr_psargs, ppsargs, sizeof (p->pr_psargs) - 1);
 	free (buffer);
 	free (ppsargs);
 	free (pfname);
@@ -133,7 +132,7 @@ error:
 
 static proc_per_thread_t *get_proc_thread_content(int pid, int tid) {
 	char *temp_p_sigpend, *temp_p_sighold, *p_sigpend, *p_sighold;
-	int size;
+	size_t size;
 	const char * file = sdb_fmt ("/proc/%d/task/%d/stat", pid, tid);
 
 	char *buff = r_file_slurp (file, &size);
@@ -299,21 +298,19 @@ static char *isAnonymousKeyword(const char *pp) {
 }
 
 static bool has_map_anonymous_content(char *buff_smaps, unsigned long start_addr, unsigned long end_addr) {
-	char *p, *pp, *extern_tok, *keyw = NULL;
+	char *pp, *extern_tok = NULL, *keyw = NULL;
 	char *identity = r_str_newf (fmt_addr, start_addr, end_addr);
 	char *str = strdup (buff_smaps);
-	bool is_anonymous;
-
-	p = strtok_r (str, "\n", &extern_tok);
+	char *p = strtok_r (str, "\n", &extern_tok);
 	for (; p; p = strtok_r (NULL, "\n", &extern_tok)) {
 		if (strstr (p, identity)) {
 			pp = strtok_r (NULL, "\n", &extern_tok);
 			for (; pp ; pp = strtok_r (NULL, "\n", &extern_tok)) {
 				if ((keyw = isAnonymousKeyword (pp))) {
-					is_anonymous = getAnonymousValue (keyw);
+					bool r = getAnonymousValue (keyw);
 					free (identity);
 					free (str);
-					return is_anonymous;
+					return r;
 				}
 			}
 		}
@@ -482,7 +479,7 @@ static linux_map_entry_t *linux_get_mapped_files(RDebug *dbg, ut8 filter_flags) 
 	RDebugMap *map;
 	bool is_anonymous = false, is_deleted = false, ret = 0;
 	char *file = NULL, *buff_maps= NULL, *buff_smaps = NULL;
-	int size_file = 0;
+	size_t size_file = 0;
 
 	file = r_str_newf ("/proc/%d/smaps", dbg->pid);
 	buff_smaps = r_file_slurp (file, &size_file);
@@ -563,7 +560,7 @@ static auxv_buff_t *linux_get_auxv(RDebug *dbg) {
 	char *buff = NULL;
 	auxv_buff_t *auxv = NULL;
 	int auxv_entries;
-	int size;
+	size_t size;
 
 	const char *file = sdb_fmt ("/proc/%d/auxv", dbg->pid);
 	buff = r_file_slurp (file, &size);
@@ -579,7 +576,7 @@ static auxv_buff_t *linux_get_auxv(RDebug *dbg) {
 			return NULL;
 		}
 		auxv->size = size;
-		auxv->data = r_mem_dup (buff, size);
+		auxv->data = r_mem_dup (buff, (int)size);
 		if (!auxv->data) {
 			free (buff);
 			free (auxv);
@@ -788,7 +785,7 @@ static proc_per_process_t *get_proc_process_content (RDebug *dbg) {
 	ut16 filter_flags, default_filter_flags = 0x33;
 	char *buff;
 	const char *file = sdb_fmt ("/proc/%d/stat", dbg->pid);
-	int size;
+	size_t size;
 
 	buff = r_file_slurp (file, &size);
 	if (!buff) {
@@ -1334,7 +1331,7 @@ fail:
 	return NULL;
 }
 
-#if __i386__ || __x86_64
+#if __i386__ || __x86_64__
 static int get_xsave_size(RDebug *dbg, int pid) {
 #ifdef PTRACE_GETREGSET
 	struct iovec local;

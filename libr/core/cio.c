@@ -1,15 +1,15 @@
-/* radare2 - LGPL - Copyright 2009-2019 - pancake */
+/* radare2 - LGPL - Copyright 2009-2021 - pancake */
 
 #include "r_core.h"
 
 R_API int r_core_setup_debugger (RCore *r, const char *debugbackend, bool attach) {
 	int pid, *p = NULL;
 	bool is_gdb = !strcmp (debugbackend, "gdb");
-	RIODesc * fd = r->file ? r_io_desc_get (r->io, r->file->fd) : NULL;
+	RIODesc * fd = r->io->desc;
 	const char *prompt = NULL;
 
 	p = fd ? fd->data : NULL;
-	r_config_set_i (r->config, "cfg.debug", 1);
+	r_config_set_b (r->config, "cfg.debug", true);
 	if (!p) {
 		eprintf ("Invalid debug io\n");
 		return false;
@@ -58,7 +58,7 @@ R_API int r_core_setup_debugger (RCore *r, const char *debugbackend, bool attach
 
 R_API int r_core_seek_base (RCore *core, const char *hex) {
 	ut64 addr = r_num_tail (core->num, core->offset, hex);
-	return r_core_seek (core, addr, 1);
+	return r_core_seek (core, addr, true);
 }
 
 R_API bool r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append) {
@@ -243,9 +243,6 @@ R_API ut8* r_core_transform_op(RCore *core, const char *arg, char op) {
 	} else if (op == '2' || op == '4' || op == '8') { // "wo2" "wo4" "wo8"
 		int inc = op - '0';
 		ut8 tmp;
-		if (inc < 1 || inc > 8) {
-			goto beach;
-		}
 		for (i = 0; (i + inc) <= core->blocksize; i += inc) {
 			if (inc == 2) {
 				tmp = buf[i];
@@ -324,32 +321,51 @@ R_API int r_core_write_op(RCore *core, const char *arg, char op) {
 	return ret;
 }
 
-static void __choose_bits_anal_hints(RCore *core, ut64 addr, int *bits) {
-	if (core->anal) {
-		int ret =  r_anal_range_tree_find_bits_at (core->anal->rb_hints_ranges, addr);
-		if (ret) {
-			*bits = ret;
+// Get address-specific bits and arch at a certain address.
+// If there are no specific infos (i.e. asm.bits and asm.arch should apply), the bits and arch will be 0 or NULL respectively!
+R_API void r_core_arch_bits_at(RCore *core, ut64 addr, R_OUT R_NULLABLE int *bits, R_OUT R_BORROW R_NULLABLE const char **arch) {
+	int bitsval = 0;
+	const char *archval = NULL;
+	RBinObject *o = r_bin_cur_object (core->bin);
+	RBinSection *s = o ? r_bin_get_section_at (o, addr, core->io->va) : NULL;
+	if (s) {
+		if (!core->fixedarch) {
+			archval = s->arch;
 		}
+		if (!core->fixedbits && s->bits) {
+			// only enforce if there's one bits set
+			switch (s->bits) {
+			case R_SYS_BITS_16:
+			case R_SYS_BITS_32:
+			case R_SYS_BITS_64:
+				bitsval = s->bits * 8;
+				break;
+			}
+		}
+	}
+	//if we found bits related with anal hints pick it up
+	if (bits && !bitsval && !core->fixedbits) {
+		bitsval = r_anal_hint_bits_at (core->anal, addr, NULL);
+	}
+	if (arch && !archval && !core->fixedarch) {
+		archval = r_anal_hint_arch_at (core->anal, addr, NULL);
+	}
+	if (bits && bitsval) {
+		*bits = bitsval;
+	}
+	if (arch && archval) {
+		*arch = archval;
 	}
 }
 
-R_API void r_core_seek_archbits(RCore *core, ut64 addr) {
+R_API void r_core_seek_arch_bits(RCore *core, ut64 addr) {
 	int bits = 0;
 	const char *arch = NULL;
-	RBinObject *o = r_bin_cur_object (core->bin);
-	RBinSection *s = o? r_bin_get_section_at (o, addr, core->io->va): NULL;
-	if (s) {
-		arch = s->arch;
-		bits = s->bits;
-	}
-	if (!bits && !core->fixedbits) {
-		//if we found bits related with anal hints pick it up
-		__choose_bits_anal_hints (core, addr, &bits);
-	}
-	if (bits && !core->fixedbits) {
+	r_core_arch_bits_at (core, addr, &bits, &arch);
+	if (bits) {
 		r_config_set_i (core->config, "asm.bits", bits);
 	}
-	if (arch && !core->fixedarch) {
+	if (arch) {
 		r_config_set (core->config, "asm.arch", arch);
 	}
 }
@@ -389,7 +405,7 @@ R_API int r_core_seek_delta(RCore *core, st64 addr) {
 		}
 	}
 	core->offset = addr;
-	return r_core_seek (core, addr, 1);
+	return r_core_seek (core, addr, true);
 }
 
 // TODO: kill this wrapper
@@ -405,19 +421,24 @@ R_API bool r_core_write_at(RCore *core, ut64 addr, const ut8 *buf, int size) {
 	return ret;
 }
 
-R_API int r_core_extend_at(RCore *core, ut64 addr, int size) {
-	int ret;
-	if (!core->io || !core->file || size < 1) {
+R_API bool r_core_extend_at(RCore *core, ut64 addr, int size) {
+	if (!core->io || !core->io->desc || size < 1) {
 		return false;
 	}
-	ret = r_io_use_fd (core->io, core->file->fd);
-	if (ret != -1) {
-		ret = r_io_extend_at (core->io, addr, size);
-		if (addr >= core->offset && addr <= core->offset+core->blocksize) {
-			r_core_block_read (core);
+	int io_va = r_config_get_i (core->config, "io.va");
+	if (io_va) {
+		RIOMap *map = r_io_map_get_at (core->io, core->offset);
+		if (map) {
+			addr = addr - r_io_map_begin (map) + map->delta;
 		}
+		r_config_set_i (core->config, "io.va", false);
 	}
-	return (ret==-1)? false: true;
+	int ret = r_io_extend_at (core->io, addr, size);
+	if (addr >= core->offset && addr <= core->offset+core->blocksize) {
+		r_core_block_read (core);
+	}
+	r_config_set_i (core->config, "io.va", io_va);
+	return ret;
 }
 
 R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
@@ -426,12 +447,12 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 	ut8 * shift_buf = NULL;
 	int res = false;
 
-	if (!core->io || !core->file) {
+	if (!core->io || !core->io->desc) {
 		return false;
 	}
 
 	if (b_size == 0 || b_size == (ut64) -1) {
-		r_io_use_fd (core->io, core->file->fd);
+		r_io_use_fd (core->io, core->io->desc->fd);
 		file_sz = r_io_size (core->io);
 		if (file_sz == UT64_MAX) {
 			file_sz = 0;
@@ -475,12 +496,11 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 	} else if ( (addr) + dist > fend) {
 		res = false;
 	} else {
-		r_io_use_fd (core->io, core->file->fd);
 		r_io_read_at (core->io, addr, shift_buf, b_size);
 		r_io_write_at (core->io, addr + dist, shift_buf, b_size);
 		res = true;
 	}
-	r_core_seek (core, addr, 1);
+	r_core_seek (core, addr, true);
 	free (shift_buf);
 	return res;
 }
@@ -490,13 +510,4 @@ R_API int r_core_block_read(RCore *core) {
 		return r_io_read_at (core->io, core->offset, core->block, core->blocksize);
 	}
 	return -1;
-}
-
-R_API int r_core_is_valid_offset (RCore *core, ut64 offset) {
-	if (!core) {
-		eprintf ("r_core_is_valid_offset: core is NULL\n");
-		r_sys_backtrace ();
-		return -1;
-	}
-	return r_io_is_valid_offset (core->io, offset, 0);
 }

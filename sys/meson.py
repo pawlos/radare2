@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Meson build for radare2"""
 
 import argparse
@@ -64,25 +64,27 @@ def set_global_variables():
     log.debug('Meson: %s', MESON)
     log.debug('Version: %s', version)
 
-def meson(root, build, prefix=None, backend=None,
-          release=False, shared=False, *, options=[]):
+def meson(command, rootdir=None, builddir=None, prefix=None, backend=None,
+          release=False, shared=None, *, options=[]):
     """[R_API] Invoke meson"""
-    command = MESON + [root, build]
+    cmd = MESON + [command]
+    if rootdir:
+        cmd.append(rootdir)
+    if builddir:
+        cmd.append(builddir)
     if prefix:
-        command.append('--prefix={}'.format(prefix))
+        cmd.append('--prefix={}'.format(prefix))
     if backend:
-        command.append('--backend={}'.format(backend))
+        cmd.append('--backend={}'.format(backend))
     if release:
-        command.append('--buildtype=release')
-    if shared:
-        command.append('--default-library=shared')
-    else:
-        command.append('--default-library=static')
+        cmd.append('--buildtype=release')
+    if shared != None:
+        cmd.append('--default-library={}'.format('shared' if shared else 'static'))
     if options:
-        command.extend(options)
+        cmd.extend(options)
 
-    log.debug('Invoking meson: %s', command)
-    ret = subprocess.call(command)
+    log.debug('Invoking meson: %s', cmd)
+    ret = subprocess.call(cmd)
     if ret != 0:
         log.error('Meson error. Exiting.')
         sys.exit(1)
@@ -157,64 +159,6 @@ def xp_compat(builddir):
             proj.write(c)
             log.debug("%s .. OK", f)
 
-def win_dist(args):
-    """Create r2 distribution for Windows"""
-    builddir = os.path.join(ROOT, args.dir)
-    PATH_FMT['DIST'] = args.install
-    PATH_FMT['BUILDDIR'] = builddir
-
-    makedirs(r'{DIST}')
-    makedirs(r'{DIST}\bin')
-    copy(r'{BUILDDIR}\binr\*\*.exe', r'{DIST}\bin')
-
-    r2_bat_fname = args.install + r'\bin\r2.bat'
-    log.debug('create "%s"', r2_bat_fname)
-    with open(r2_bat_fname, 'w') as r2_bat:
-        r2_bat.write('@"%s\\bin\\radare2" %%*\n' % os.path.abspath(args.install))
-
-    copy(r'{BUILDDIR}\libr\*\*.dll', r'{DIST}\bin')
-    makedirs(r'{DIST}\{R2_LIBDIR}')
-    if args.shared:
-        copy(r'{BUILDDIR}\libr\*\*.lib', r'{DIST}\{R2_LIBDIR}')
-    else:
-        copy(r'{BUILDDIR}\libr\*\*.a', r'{DIST}\{R2_LIBDIR}')
-    win_dist_libr2(install_webui=args.webui)
-
-def win_dist_libr2(install_webui=False, **path_fmt):
-    """[R_API] Add libr2 data/www/include/doc to dist directory"""
-    PATH_FMT.update(path_fmt)
-
-    if install_webui:
-        copytree(r'{ROOT}\shlr\www', r'{DIST}\{R2_WWWROOT}')
-    copytree(r'{ROOT}\libr\magic\d\default', r'{DIST}\{R2_SDB}\magic')
-    makedirs(r'{DIST}\{R2_SDB}\syscall')
-    copy(r'{BUILDDIR}\libr\syscall\d\*.sdb', r'{DIST}\{R2_SDB}\syscall')
-    makedirs(r'{DIST}\{R2_SDB}\fcnsign')
-    copy(r'{BUILDDIR}\libr\anal\d\*.sdb', r'{DIST}\{R2_SDB}\fcnsign')
-    makedirs(r'{DIST}\{R2_SDB}\opcodes')
-    copy(r'{BUILDDIR}\libr\asm\d\*.sdb', r'{DIST}\{R2_SDB}\opcodes')
-    makedirs(r'{DIST}\{R2_INCDIR}\sdb')
-    makedirs(r'{DIST}\{R2_INCDIR}\r_util')
-    makedirs(r'{DIST}\{R2_INCDIR}\r_crypto')
-    copy(r'{ROOT}\libr\include\*.h', r'{DIST}\{R2_INCDIR}')
-    copy(r'{BUILDDIR}\r_version.h', r'{DIST}\{R2_INCDIR}')
-    copy(r'{BUILDDIR}\r_userconf.h', r'{DIST}\{R2_INCDIR}')
-    copy(r'{ROOT}\libr\include\sdb\*.h', r'{DIST}\{R2_INCDIR}\sdb')
-    copy(r'{ROOT}\libr\include\r_util\*.h', r'{DIST}\{R2_INCDIR}\r_util')
-    copy(r'{ROOT}\libr\include\r_crypto\*.h', r'{DIST}\{R2_INCDIR}\r_crypto')
-    makedirs(r'{DIST}\{R2_FORTUNES}')
-    copy(r'{ROOT}\doc\fortunes.*', r'{DIST}\{R2_FORTUNES}')
-    copytree(r'{ROOT}\libr\bin\d', r'{DIST}\{R2_SDB}\format',
-             exclude=('Makefile', 'meson.build', 'dll'))
-    makedirs(r'{DIST}\{R2_SDB}\format\dll')
-    copy(r'{BUILDDIR}\libr\bin\d\*.sdb', r'{DIST}\{R2_SDB}\format\dll')
-    copytree(r'{ROOT}\libr\cons\d', r'{DIST}\{R2_THEMES}',
-             exclude=('Makefile', 'meson.build'))
-    makedirs(r'{DIST}\{R2_FLAGS}')
-    copy(r'{BUILDDIR}\libr\flag\d\*.r2', r'{DIST}\{R2_FLAGS}')
-    makedirs(r'{DIST}\{R2_HUD}')
-    copy(r'{ROOT}\doc\hud', r'{DIST}\{R2_HUD}\main')
-
 def build(args):
     """ Build radare2 """
     log.info('Building radare2')
@@ -225,28 +169,24 @@ def build(args):
     if args.local:
         options.append('-Dlocal=true')
     if not os.path.exists(r2_builddir):
-        meson(ROOT, r2_builddir, prefix=args.prefix, backend=args.backend,
+        meson('setup', builddir=r2_builddir, prefix=args.prefix, backend=args.backend,
               release=args.release, shared=args.shared, options=options)
     if args.backend != 'ninja':
         # XP support was dropped in Visual Studio 2019 v142 platform
-        if args.backend != 'vs2019' and args.xp:
+        if args.backend == 'vs2017' and args.xp:
             xp_compat(r2_builddir)
         if not args.project:
             project = os.path.join(r2_builddir, 'radare2.sln')
-            msbuild(project, '/m')
+            params = ['/m', '/clp:Summary;Verbosity=minimal']
+            if args.backend == 'vs2017' and args.xp:
+                params.append('/p:XPDeprecationWarning=false')
+            msbuild(project, *params)
     else:
         ninja(r2_builddir)
 
 def install(args):
     """ Install radare2 """
-    if os.name == 'nt':
-        win_dist(args)
-        return
-    log.warning('Install not implemented yet for this platform.')
-    # TODO
-    #if os.name == 'posix':
-    #    os.system('DESTDIR="{destdir}" ninja -C {build} install'
-    #            .format(destdir=destdir, build=args.dir))
+    meson('install', options=['-C', '{}'.format(args.dir), '--no-rebuild'])
 
 def main():
     # Create logger and get applications paths
@@ -254,8 +194,10 @@ def main():
 
     # Create parser
     parser = argparse.ArgumentParser(description='Mesonbuild scripts for radare2')
-    parser.add_argument('--asan', action='store_true',
-            help='Build radare2 with ASAN support.')
+    # --sanitize=address,signed-integer-overflow for faster build
+    parser.add_argument('--sanitize', nargs='?',
+            const='address,undefined,signed-integer-overflow', metavar='sanitizers',
+            help='Build radare2 with sanitizer support (default: %(const)s)')
     parser.add_argument('--project', action='store_true',
             help='Create a visual studio project and do not build.')
     parser.add_argument('--release', action='store_true',
@@ -284,29 +226,26 @@ def main():
             help='Install using symlinks')
     parser.add_argument('--webui', action='store_true',
             help='Install WebUIs')
-    if os.name == 'nt':
-        parser.add_argument('--install', help='Installation directory')
-    else:
-        parser.add_argument('--install', action='store_true',
+    parser.add_argument('--install', action='store_true',
             help='Install radare2 after building')
     parser.add_argument('--options', nargs='*', default=[])
     args = parser.parse_args()
     if args.alias:
         print("alias m=\"" + os.path.abspath(__file__) + "\"")
         sys.exit(0);
-    if args.asan:
+    if args.sanitize:
         if os.uname().sysname == 'OpenBSD':
-            log.error("Asan insupported under OpenBSD")
+            log.error("Sanitizers unsupported under OpenBSD")
             sys.exit(1)
         cflags = os.environ.get('CFLAGS')
         if not cflags:
             cflags = ''
-        os.environ['CFLAGS'] = cflags + ' -fsanitize=address'
+        os.environ['CFLAGS'] = cflags + ' -fsanitize=' + args.sanitize
         if os.uname().sysname != 'Darwin':
           ldflags = os.environ.get('LDFLAGS')
           if not ldflags:
               ldflags = ''
-          os.environ['LDFLAGS'] = ldflags + ' -lasan'
+          os.environ['LDFLAGS'] = ldflags + ' -fsanitize=' + args.sanitize
 
     # Check arguments
     if args.pull:
@@ -320,11 +259,10 @@ def main():
     if args.xp and args.backend in 'vs2019':
         log.error('--xp is not compatible with --backend vs2019')
         sys.exit(1)
-    if os.name == 'nt' and args.install and os.path.exists(args.install):
-        log.error('%s already exists', args.install)
-        sys.exit(1)
-    if os.name == 'nt' and not args.prefix:
+    if not args.prefix:
         args.prefix = os.path.join(ROOT, args.dir, 'priv_install_dir')
+    else:
+        args.prefix = os.path.abspath(args.prefix)
     for option in args.options:
         if '=' not in option:
             log.error('Invalid option: %s', option)

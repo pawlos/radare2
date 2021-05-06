@@ -15,6 +15,9 @@ ENTITL=radare2.xcent
 #CFLAGS+=-flto
 #LDFLAGS+=-flto
 
+CFLAGS_INCLUDES+=-I$(SHLR)/sdb/src
+CFLAGS_INCLUDES+=-I$(LIBR)/include
+
 ifeq (${COMPILER},emscripten)
 # https://kripken.github.io/emscripten-site/docs/optimizing/Optimizing-Code.html
 # -s INLINING_LIMIT=1
@@ -40,7 +43,13 @@ ios:
 	$(MAKE)
 	$(MAKE) ios-sign
 
-ios-sign iossign sign:
+ifeq ($(shell uname),Darwin)
+sign: macos-sign
+else
+sign: ios-sign
+endif
+
+ios-sign iossign:
 	xcrun --sdk iphoneos codesign \
 		-s- --entitlements radare2_ios.xml radare2
 	# -f -s "$$IOS_CERTID" --entitlements radare2_ios.xml radare2
@@ -51,7 +60,7 @@ ios_sdk_sign:
 
 macos-sign macossign:
 	rm -f radare2
-	${CC} radare2.c ${CFLAGS} ${LDFLAGS} ${LINK} -o radare2 \
+	${CC} radare2.c ${CFLAGS_INCLUDES} ${CFLAGS} ${LDFLAGS} ${LINK} -o radare2 \
 		-sectcreate __TEXT __info_plist Info.plist \
 		-framework Security -framework CoreFoundation
 	#xcrun --sdk $(MACSDK) codesign -f -s ${CERTID} --entitlements radare2_macos.xml radare2
@@ -87,4 +96,6 @@ include ../../shlr/bochs/deps.mk
 include ../../shlr/grub/deps.mk
 include ../../shlr/qnx/deps.mk
 include ../../shlr/ar/deps.mk
+include ../../shlr/yxml/deps.mk
+include ../../shlr/sdb.mk
 LDFLAGS+=$(LINK)

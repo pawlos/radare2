@@ -1,17 +1,17 @@
-/* radare - LGPL - Copyright 2007-2019 - pancake */
+/* radare - LGPL - Copyright 2007-2020 - pancake */
 
 #if __WINDOWS__
 #include <stdlib.h>
 #endif
 
+#include <errno.h>
 #include <math.h>  /* for ceill */
 #include <r_util.h>
 #define R_NUM_USE_CALC 1
 
 static ut64 r_num_tailff(RNum *num, const char *hex);
 
-// TODO: rename to r_num_srand()
-static void r_srand(int seed) {
+static void r_num_srand(int seed) {
 #if HAVE_ARC4RANDOM_UNIFORM
 	// no-op
 	(void)seed;
@@ -28,8 +28,22 @@ static int r_rand(int mod) {
 #endif
 }
 
-R_API void r_num_irand() {
-	r_srand (r_sys_now ());
+// This function count bits set on 32bit words
+R_API size_t r_num_bit_count(ut32 val) {
+	/* visual studio doesnt supports __buitin_clz */
+#if defined(_MSC_VER) || defined(__TINYC__)
+	size_t count = 0;
+	val = val - ((val >> 1) & 0x55555555);
+	val = (val & 0x33333333) + ((val >> 2) & 0x33333333);
+	count = (((val + (val >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+	return count;
+#else
+	return val? __builtin_clz (val): 0;
+#endif
+}
+
+R_API void r_num_irand(void) {
+	r_num_srand (r_time_now ());
 }
 
 R_API int r_num_rand(int max) {
@@ -73,7 +87,7 @@ R_API RNum *r_num_new(RNumCallback cb, RNumCallback2 cb2, void *ptr) {
 }
 
 R_API void r_num_free(RNum *num) {
-	R_FREE (num);
+	free (num);
 }
 
 #define KB (1ULL << 10)
@@ -98,7 +112,7 @@ R_API char *r_num_units(char *buf, size_t len, ut64 num) {
 	char unit;
 	const char *fmt_str;
 	if (!buf) {
-		buf = malloc (len + 1);
+		buf = malloc (64);
 		if (!buf) {
 			return NULL;
 		}
@@ -225,7 +239,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 		}
 	} else if (!strncmp (str, "0xf..", 5) || !strncmp (str, "0xF..", 5)) {
 		ret = r_num_tailff (num, str + 5);
-	} else if (str[0] == '0' && tolower (str[1]) == 'x') {
+	} else if (str[0] == '0' && tolower ((unsigned char)str[1]) == 'x') {
 		const char *lodash = strchr (str + 2, '_');
 		if (lodash) {
 			// Support 0x1000_f000_4000
@@ -233,12 +247,17 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 			char *s = strdup (str + 2);
 			if (s) {
 				r_str_replace_char (s, '_', 0);
+				errno = 0;
 				ret = strtoull (s, NULL, 16);
 				free (s);
 			}
 		} else {
+			errno = 0;
 			ret = strtoull (str + 2, NULL, 16);
 			// sscanf (str+2, "%"PFMT64x, &ret);
+		}
+		if (errno == ERANGE) {
+			error (num, "number won't fit into 64 bits");
 		}
 	} else {
 		char *endptr;
@@ -365,7 +384,11 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 			ret = _strtoui64 (str, &endptr, 10);
 #endif
 #endif
+			errno = 0;
 			ret = strtoull (str, &endptr, 10);
+			if (errno == ERANGE) {
+				error (num, "number won't fit into 64 bits");
+			}
 			if (!IS_DIGIT (*str) || (*endptr && *endptr != lch)) {
 				error (num, "unknown symbol");
 			}
@@ -530,7 +553,7 @@ R_API int r_num_to_bits(char *out, ut64 num) {
 	return size;
 }
 
-R_API int r_num_to_trits(char *out, ut64 num) {
+R_API int r_num_to_ternary(char *out, ut64 num) {
 	if (out == NULL) {
 		return false;
 	}
@@ -687,10 +710,12 @@ R_API char* r_num_as_string(RNum *___, ut64 n, bool printable_only) {
 	return NULL;
 }
 
-// SHITTY API
-R_API int r_is_valid_input_num_value(RNum *num, const char *input_value){
-	ut64 value = input_value ? r_num_math (num, input_value) : 0;
-	return !(value == 0 && input_value && *input_value == '0');
+R_API bool r_is_valid_input_num_value(RNum *num, const char *input_value) {
+	if (!input_value) {
+		return false;
+	}
+	ut64 value = r_num_math (num, input_value);
+	return !(value == 0 && *input_value != '0');
 }
 
 // SHITTY API

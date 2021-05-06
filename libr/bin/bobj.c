@@ -26,19 +26,19 @@ static int reloc_cmp(const void *a, const RBNode *b, void *user) {
 	return 0;
 }
 
-static void reloc_free(RBNode *rbn) {
+static void reloc_free(RBNode *rbn, void *user) {
 	free (container_of (rbn, RBinReloc, vrb));
 }
 
 static void object_delete_items(RBinObject *o) {
 	ut32 i = 0;
 	r_return_if_fail (o);
-	sdb_free (o->addr2klassmethod);
+	ht_up_free (o->addr2klassmethod);
 	r_list_free (o->entries);
 	r_list_free (o->fields);
 	r_list_free (o->imports);
 	r_list_free (o->libs);
-	r_rbtree_free (o->relocs, reloc_free);
+	r_rbtree_free (o->relocs, reloc_free, NULL);
 	r_list_free (o->sections);
 	r_list_free (o->strings);
 	ht_up_free (o->strings_db);
@@ -116,8 +116,6 @@ static RList *classes_from_symbols(RBinFile *bf) {
 				if (!mn) {
 					mn = strstr (dn, cn);
 					if (mn && mn[strlen (cn)] == '.') {
-						mn += strlen (cn) + 1;
-						// eprintf ("METHOD %s  %s\n", sym->classname, mn);
 						r_list_append (c->methods, sym);
 					}
 				}
@@ -169,9 +167,9 @@ R_IPI RBinObject *r_bin_object_new(RBinFile *bf, RBinPlugin *plugin, ut64 basead
 	// the object is created from. The reason for this is to prevent
 	// mis-reporting when the file is loaded from impartial bytes or is
 	// extracted from a set of bytes in the file
-	r_bin_object_set_items (bf, o);
 	r_bin_file_set_obj (bf->rbin, bf, o);
 	r_bin_set_baddr (bf->rbin, o->baddr);
+	r_bin_object_set_items (bf, o);
 
 	bf->sdb_info = o->kv;
 	sdb = bf->rbin->sdb;
@@ -246,6 +244,27 @@ static RBNode *list2rbtree(RList *relocs) {
 	return res;
 }
 
+static void r_bin_object_rebuild_classes_ht(RBinObject *o) {
+	ht_pp_free (o->classes_ht);
+	ht_pp_free (o->methods_ht);
+	o->classes_ht = ht_pp_new0 ();
+	o->methods_ht = ht_pp_new0 ();
+
+	RListIter *it, *it2;
+	RBinClass *klass;
+	RBinSymbol *method;
+	r_list_foreach (o->classes, it, klass) {
+		if (klass->name) {
+			ht_pp_insert (o->classes_ht, klass->name, klass);
+
+			r_list_foreach (klass->methods, it2, method) {
+				const char *name = sdb_fmt ("%s::%s", klass->name, method->name);
+				ht_pp_insert (o->methods_ht, name, method);
+			}
+		}
+	}
+}
+
 R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 	r_return_val_if_fail (bf && o && o->plugin, false);
 
@@ -301,7 +320,7 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 		r_list_free (o->imports);
 		o->imports = p->imports (bf);
 		if (o->imports) {
-			o->imports->free = r_bin_import_free;
+			o->imports->free = (RListFree)r_bin_import_free;
 		}
 	}
 	if (p->symbols) {
@@ -335,8 +354,7 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 				REBASE_PADDR (o, l, RBinReloc);
 				o->relocs = list2rbtree (l);
 				l->free = NULL;
-				// causes double free
-				//r_list_free (l);
+				r_list_free (l);
 			}
 		}
 	}
@@ -356,6 +374,7 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 				// XXX we should probably merge them instead
 				r_list_free (o->classes);
 				o->classes = classes;
+				r_bin_object_rebuild_classes_ht (o);
 			}
 			isSwift = r_bin_lang_swift (bf);
 			if (isSwift) {
@@ -378,12 +397,10 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 			RBinSymbol *method;
 			if (!o->addr2klassmethod) {
 				// this is slow. must be optimized, but at least its cached
-				o->addr2klassmethod = sdb_new0 ();
+				o->addr2klassmethod = ht_up_new0 ();
 				r_list_foreach (klasses, iter, klass) {
 					r_list_foreach (klass->methods, iter2, method) {
-						char *km = sdb_fmt ("method.%s.%s", klass->name, method->name);
-						char *at = sdb_fmt ("0x%08"PFMT64x, method->vaddr);
-						sdb_set (o->addr2klassmethod, at, km, 0);
+						ht_up_insert (o->addr2klassmethod, method->vaddr, method);
 					}
 				}
 			}
@@ -402,7 +419,7 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *o) {
 	if (p->mem)  {
 		o->mem = p->mem (bf);
 	}
-	if (bin->filter_rules & (R_BIN_REQ_INFO | R_BIN_REQ_SYMBOLS | R_BIN_REQ_IMPORTS)) {
+	if (o->info && bin->filter_rules & (R_BIN_REQ_INFO | R_BIN_REQ_SYMBOLS | R_BIN_REQ_IMPORTS)) {
 		o->lang = isSwift? R_BIN_NM_SWIFT: r_bin_load_languages (bf);
 	}
 	return true;
@@ -421,10 +438,13 @@ R_IPI RBNode *r_bin_object_patch_relocs(RBin *bin, RBinObject *o) {
 		if (!tmp) {
 			return o->relocs;
 		}
-		r_rbtree_free (o->relocs, reloc_free);
+		r_rbtree_free (o->relocs, reloc_free, NULL);
 		REBASE_PADDR (o, tmp, RBinReloc);
 		o->relocs = list2rbtree (tmp);
 		first = false;
+		bin->is_reloc_patched = true;
+		tmp->free = NULL;
+		r_list_free (tmp);
 	}
 	return o->relocs;
 }

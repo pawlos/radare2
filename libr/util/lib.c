@@ -1,18 +1,17 @@
-/* radare - LGPL - Copyright 2008-2019 - pancake */
+/* radare - LGPL - Copyright 2008-2021 - pancake */
 
 #include <r_util.h>
 #include <r_lib.h>
 
-// TODO: boolify
-#define IFDBG if(__has_debug)
-
 R_LIB_VERSION(r_lib);
 
+/* TODO: avoid globals */
+#define IFDBG if(__has_debug)
 static bool __has_debug = false;
 
 /* XXX : this must be registered in runtime */
 static const char *r_lib_types[] = {
-	"io", "dbg", "lang", "asm", "anal", "parse", "bin", "bin_xtr",
+	"io", "dbg", "lang", "asm", "anal", "parse", "bin", "bin_xtr", "bin_ldr",
 	"bp", "syscall", "fastcall", "crypto", "core", "egg", "fs", NULL
 };
 
@@ -35,6 +34,7 @@ R_API int r_lib_types_get_i(const char *str) {
 
 R_API void *r_lib_dl_open(const char *libname) {
 	void *ret = NULL;
+#if WANT_DYLINK
 #if __UNIX__
 	if (libname) {
 		ret = dlopen (libname, RTLD_GLOBAL | RTLD_LAZY);
@@ -64,14 +64,19 @@ R_API void *r_lib_dl_open(const char *libname) {
 		eprintf ("r_lib_dl_open: error: %s\n", libname);
 	}
 #endif
+#endif
 	return ret;
 }
 
 R_API void *r_lib_dl_sym(void *handler, const char *name) {
+#if WANT_DYLINK
 #if __UNIX__
 	return dlsym (handler, name);
 #elif __WINDOWS__
 	return GetProcAddress (handler, name);
+#else
+	return NULL;
+#endif
 #else
 	return NULL;
 #endif
@@ -93,7 +98,7 @@ R_API char *r_lib_path(const char *libname) {
 	}
 	WCHAR *name = r_utf8_to_utf16 (tmp);
 	free (tmp);
-	char *path = NULL;
+	WCHAR *path = NULL;
 	if (!name) {
 		goto err;
 	}
@@ -103,7 +108,7 @@ R_API char *r_lib_path(const char *libname) {
 		r_sys_perror ("SearchPath");
 		goto err;
 	}
-	path = malloc (count * sizeof (TCHAR));
+	path = malloc (count * sizeof (WCHAR));
 	if (!path) {
 		goto err;
 	}
@@ -113,11 +118,12 @@ R_API char *r_lib_path(const char *libname) {
 		goto err;
 	}
 	tmp = r_utf16_to_utf8 (path);
+	free (name);
 	free (path);
-	path = tmp;
+	return tmp;
 err:
 	free (name);
-	return path;
+	return NULL;
 #else
 #if __APPLE__
 	char *env = r_sys_getenv ("DYLD_LIBRARY_PATH");
@@ -135,7 +141,7 @@ err:
 		if (next) {
 			*next = 0;
 		}
-		char *libpath = r_str_newf ("%s/%s." R_LIB_EXT, path0, libname);
+		char *libpath = r_str_newf ("%s"R_SYS_DIR"%s." R_LIB_EXT, path0, libname);
 		if (r_file_exists (libpath)) {
 			free (env);
 			return libpath;
@@ -151,13 +157,8 @@ err:
 R_API RLib *r_lib_new(const char *symname, const char *symnamefunc) {
 	RLib *lib = R_NEW (RLib);
 	if (lib) {
-		char *e = r_sys_getenv ("R_DEBUG");
-		if (e) {
-			__has_debug = *e;
-			free (e);
-		} else {
-			__has_debug = false;
-		}
+		__has_debug = r_sys_getenv_asbool ("R2_DEBUG");
+		lib->ignore_version = r_sys_getenv_asbool ("R2_IGNVER");
 		lib->handlers = r_list_newf (free);
 		lib->plugins = r_list_newf (free);
 		lib->symname = strdup (symname? symname: R_LIB_SYMNAME);
@@ -172,6 +173,7 @@ R_API void r_lib_free(RLib *lib) {
 		r_list_free (lib->handlers);
 		r_list_free (lib->plugins);
 		free (lib->symname);
+		free (lib->symnamefunc);
 		free (lib);
 	}
 }
@@ -263,7 +265,7 @@ R_API int r_lib_open(RLib *lib, const char *file) {
 	}
 
 	if (__already_loaded (lib, file)) {
-		eprintf("Not loading library because it has already been loaded from somewhere else: '%s'\n", file);
+		eprintf ("Not loading library because it has already been loaded from somewhere else: '%s'\n", file);
 		return -1;
 	}
 
@@ -295,12 +297,38 @@ R_API int r_lib_open(RLib *lib, const char *file) {
 	return res;
 }
 
+static char *major_minor(const char *s) {
+	char *a = strdup (s);
+	char *p = strchr (a, '.');
+	if (p) {
+		p = strchr (p + 1, '.');
+		if (p) {
+			*p = 0;
+		}
+	}
+	return a;
+}
+
 R_API int r_lib_open_ptr(RLib *lib, const char *file, void *handler, RLibStruct *stru) {
 	r_return_val_if_fail (lib && file && stru, -1);
-	if (stru->version) {
-		if (strcmp (stru->version, R2_VERSION)) {
+	if (stru->version && !lib->ignore_version) {
+		char *mm0 = major_minor (stru->version);
+		char *mm1 = major_minor (R2_VERSION);
+		bool mismatch = strcmp (mm0, mm1);
+		free (mm0);
+		free (mm1);
+		if (mismatch) {
 			eprintf ("Module version mismatch %s (%s) vs (%s)\n",
 				file, stru->version, R2_VERSION);
+			if (stru->pkgname) {
+				const char *dot = strchr (stru->version, '.');
+				int major = atoi (stru->version);
+				int minor = dot ? atoi (dot + 1) : 0;
+				// The pkgname member was introduced in 4.2.0
+				if (major > 4 || (major == 4 && minor >= 2)) {
+					printf ("r2pm -ci %s\n", stru->pkgname);
+				}
+			}
 			return -1;
 		}
 	}
@@ -326,6 +354,7 @@ R_API int r_lib_open_ptr(RLib *lib, const char *file, void *handler, RLibStruct 
 }
 
 R_API bool r_lib_opendir(RLib *lib, const char *path) {
+#if WANT_DYLINK
 	r_return_val_if_fail (lib && path, false);
 #if __WINDOWS__
 	wchar_t file[1024];
@@ -393,6 +422,7 @@ R_API bool r_lib_opendir(RLib *lib, const char *path) {
 		}
 	}
 	closedir (dh);
+#endif
 #endif
 	return true;
 }

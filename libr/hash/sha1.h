@@ -33,6 +33,9 @@
  * GPL.
  */
 
+#ifndef SHA1_H
+#define SHA1_H
+
 #if 0
 typedef struct {
   unsigned int H[5];
@@ -42,6 +45,8 @@ typedef struct {
 } SHA_CTX;
 #endif
 
-void SHA1_Init(R_SHA_CTX *ctx);
-void SHA1_Update(R_SHA_CTX *ctx, const void *dataIn, int len);
-void SHA1_Final(unsigned char hashout[20], R_SHA_CTX *ctx);
+void r_SHA1_Init(R_SHA_CTX *ctx);
+void r_SHA1_Update(R_SHA_CTX *ctx, const void *dataIn, int len);
+void r_SHA1_Final(unsigned char hashout[20], R_SHA_CTX *ctx);
+
+#endif

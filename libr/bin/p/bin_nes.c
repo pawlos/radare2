@@ -45,7 +45,7 @@ static void addsym(RList *ret, const char *name, ut64 addr, ut32 size) {
 	if (!ptr) {
 		return;
 	}
-	ptr->name = strdup (name? name: "");
+	ptr->name = strdup (r_str_get (name));
 	ptr->paddr = ptr->vaddr = addr;
 	ptr->size = size;
 	ptr->ordinal = 0;
@@ -142,7 +142,7 @@ static RList *mem(RBinFile *bf) {
 	if (!(n = R_NEW0 (RBinMem))) {
 		return ret;
 	}
-	m->mirrors = r_list_new();
+	m->mirrors = r_list_new ();
 	n->name = strdup ("RAM_MIRROR_2");
 	n->addr = RAM_MIRROR_2_ADDRESS;
 	n->size = RAM_MIRROR_2_SIZE;
