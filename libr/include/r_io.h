@@ -52,6 +52,10 @@ typedef void * r_ptrace_data_t;
 #elif __APPLE__
 typedef int r_ptrace_request_t;
 typedef int r_ptrace_data_t;
+#elif __OpenBSD__
+typedef int r_ptrace_request_t;
+typedef int r_ptrace_data_t;
+#define R_PTRACE_NODATA 0
 #else
 typedef int r_ptrace_request_t;
 typedef void *r_ptrace_data_t;
@@ -512,7 +516,7 @@ extern RIOPlugin r_io_plugin_r2pipe;
 extern RIOPlugin r_io_plugin_r2web;
 extern RIOPlugin r_io_plugin_qnx;
 extern RIOPlugin r_io_plugin_r2k;
-extern RIOPlugin r_io_plugin_tcp;
+extern RIOPlugin r_io_plugin_tcpslurp;
 extern RIOPlugin r_io_plugin_bochs;
 extern RIOPlugin r_io_plugin_null;
 extern RIOPlugin r_io_plugin_ar;
@@ -520,6 +524,7 @@ extern RIOPlugin r_io_plugin_rbuf;
 extern RIOPlugin r_io_plugin_winedbg;
 extern RIOPlugin r_io_plugin_gprobe;
 extern RIOPlugin r_io_plugin_fd;
+extern RIOPlugin r_io_plugin_socket;
 
 #if __cplusplus
 }

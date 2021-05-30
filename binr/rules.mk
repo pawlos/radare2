@@ -6,14 +6,16 @@ include ../../shlr/sdb.mk
 ifeq (,$(findstring tcc,${CC}))
 CFLAGS+=-pie
 endif
-CFLAGS+=-I$(LTOP)/include
+CFLAGS:=-I$(LTOP)/include -I$(LTOP)/include/sdb $(CFLAGS)
 
 ifeq (${ANDROID},1)
 LDFLAGS+=-lm
 else
 ifneq (${OSTYPE},linux)
 LDFLAGS+=-lpthread
+ifeq (${OSTYPE},freebsd)
 LDFLAGS+=-ldl
+endif
 LDFLAGS+=-lm
 endif
 endif
@@ -34,7 +36,7 @@ EXT_EXE=.bc
 endif
 
 ifeq ($(USE_RPATH),1)
-LDFLAGS+=-Wl,-rpath "${LIBDIR}"
+LDFLAGS+=-Wl,-rpath,"${LIBDIR}"
 endif
 
 OBJ+=${BIN}.o

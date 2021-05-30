@@ -434,7 +434,7 @@ static int r_core_file_do_load_for_io_plugin(RCore *r, ut64 baseaddr, ut64 loada
 	}
 	binfile = r_bin_cur (r->bin);
 	if (r_core_bin_set_env (r, binfile)) {
-		if (!r->anal->sdb_cc->path) {
+		if (!sdb_const_get (r->anal->sdb_cc, "default.cc", 0)) {
 			R_LOG_WARN ("No calling convention defined for this file, analysis may be inaccurate.\n");
 		}
 	}
@@ -641,7 +641,6 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 		eprintf ("r_core_bin_load: no file specified\n");
 		return false;
 	}
-
 	r->bin->minstrlen = r_config_get_i (r->config, "bin.minstr");
 	r->bin->maxstrbuf = r_config_get_i (r->config, "bin.maxstrbuf");
 	if (is_io_load) {
@@ -670,6 +669,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 	if (plugin && plugin->name) {
 		load_scripts_for (r, plugin->name);
 	}
+	r_core_bin_export_info (r, R_MODE_SET);
 	cmd_load = r_config_get (r->config, "cmd.load");
 	if (cmd_load && *cmd_load) {
 		r_core_cmd (r, cmd_load, 0);

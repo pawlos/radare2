@@ -36,10 +36,10 @@ CS_ARCHIVE=https://$(CS_URL_BASE)/archive
 CS_UPD=20201203
 # NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/meson.build
 ifeq ($(USE_CS4),1)
-CS_TIP=aa74f5d1ba5348c0441fbff0c0c151d95d2fa459
+CS_TIP=a7cac8352f7397aa73bb2e2dcc1b6cdb2e1b8461
 CS_BRA=v4
 else
-CS_TIP=702dbe78ca116de8ec65f122d9202c2c1f4a2b4c
+CS_TIP=f278de39c1e8a9fca977b8dfeed99d6d1f8b82bf
 CS_BRA=next
 endif
 ifeq ($(CS_COMMIT_ARCHIVE),1)
@@ -212,6 +212,10 @@ capstone: capstone-$(CS_VER).tar.gz
 	tar xzvf capstone-$(CS_VER).tar.gz
 	rm -rf capstone
 	mv capstone-$(CS_VER) capstone
+	$(MAKE) patch-capstone
+
+# already implemented in capstone.sh
+patch-capstone:
 ifeq ($(CS_PATCHES),1)
 	if [ -d capstone/.git ]; then \
 ifeq ($(USE_CS4),1)
@@ -236,6 +240,7 @@ ifeq ($(WITHOUT_PULL),1)
 else
 	"$(SHELL)" capstone.sh "${CS_URL}" "${CS_BRA}" "${CS_TIP}" "${CS_REV}" "${CS_ARCHIVE_URL}"
 endif
+
 
 .PHONY: capstone capstone-sync
 endif
@@ -294,7 +299,7 @@ spp-sync sync-spp:
 	git add spp
 
 spp: spp-sync
-	CFLAGS="-DUSE_R2=1 -I../../libr/include -DHAVE_FORK=${HAVE_FORK} -fPIC" $(MAKE) -C spp r2lib
+	export CFLAGS="-DUSE_R2=1 -I../../libr/include -DHAVE_FORK=${HAVE_FORK} -fPIC";  $(MAKE) -C spp r2lib
 
 SHLRS+=ar/libr_ar.a
 SHLRS+=bochs/lib/libbochs.a
@@ -327,9 +332,4 @@ endif
 
 .PHONY: spp
 
-.PHONY: mpc mpc-clean clean-mpc
-mpc:
-	$(MAKE) -C mpc all
-
-mpc-clean clean-mpc:
-	$(MAKE) -C mpc clean
+include mpc/deps.mk

@@ -284,7 +284,7 @@ RUN
 NAME=za r + z/
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 za main r sym.print
 z/
 ?v sign.refs.main_0
@@ -337,7 +337,7 @@ z/
 f~?
 e search.align=1
 z/
-f~?
+f~sign?
 EOF
 EXPECT=<<EOF
 0
@@ -387,7 +387,7 @@ za foo b 11223344
 e zign.minsz = 0
 fs *
 z/
-f~?
+f~sign?
 f-*
 e zign.minsz = 5
 z/
@@ -416,7 +416,7 @@ RUN
 NAME=zaf
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 e zign.mincc = 0
 zs zigs
 zaf main
@@ -439,7 +439,7 @@ RUN
 NAME=zaf at offset
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 e zign.mincc = 0
 zs zigs
 zaf @ main
@@ -462,7 +462,7 @@ RUN
 NAME=zaf (root zignspace)
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 e zign.mincc = 0
 zaf main
 z
@@ -483,7 +483,7 @@ RUN
 NAME=zaf zigname
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 e zign.mincc = 0
 zs zigs
 zaf main foobar
@@ -506,7 +506,7 @@ RUN
 NAME=zaf zigname (root zignspace)
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 e zign.mincc = 0
 zaf main foobar
 z
@@ -528,7 +528,7 @@ RUN
 NAME=zs + zaf + z/
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 zs zigs
 zaf main
 z/
@@ -542,7 +542,7 @@ RUN
 NAME=zs + zaf zigname + z/
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 zaf main foobar
 z/
 ?v sign.bytes.foobar_0
@@ -555,7 +555,7 @@ RUN
 NAME=zs * searches all zignspaces
 FILE=bins/elf/analysis/zigs
 CMDS=<<EOF
-aaa
+aa
 zs test
 zaf main foobar
 zs *
@@ -1209,12 +1209,12 @@ RUN
 NAME=zj producing valid types
 FILE=bins/elf/static-glibc-2.27
 CMDS=<<EOF
-aaa
+af @0x00484d40
 zaf fcn.00484d40 fcn.00484d40
 zj
 EOF
 EXPECT=<<EOF
-[{"name":"fcn.00484d40","bytes":"55534883ec08488b1f4885db741b4889fd4889dfe857b7f7ff4801d8803800751748c74500000000004883c4084889d85b5dc30f1f440000c600004883c001488945004883c4084889d85b5dc3","mask":"ffffffffffffffffffffffffff00ffffffffffffff00000000ffffffffffffff00ffffffffffffffffffffffffffffffffffff0000000000ffffffffffffffffffffffffffffffffffffffffff","graph":{"cc":4,"nbbs":5,"edges":5,"ebbs":2,"bbsum":72},"addr":4738368,"refs":[],"xrefs":[],"vars":["r82"],"types":[{"name":"arg1","type":"int64_t"}],"hash":{"bbhash":"8ff8a5c7f84179483b764fbb18dc4c44f39da6527a0a16485c7ae519f00e687f"}}]
+[{"name":"fcn.00484d40","bytes":"55534883ec08488b1f4885db741b4889fd4889dfe857b7f7ff4801d8803800751748c74500000000004883c4084889d85b5dc30f1f440000c600004883c001488945004883c4084889d85b5dc3","mask":"ffffffffffffffffffffffffff00ffffffffffffff00000000ffffffffffffff00ffffffffffffffffffffffffffffffffffff0000000000ffffffffffffffffffffffffffffffffffffffffff","graph":{"cc":4,"nbbs":5,"edges":5,"ebbs":2,"bbsum":72},"addr":4738368,"refs":[],"xrefs":[],"vars":["r82"],"types":[{"name":"arg1","type":"int64_t"}],"collisions":[],"hash":{"bbhash":"8ff8a5c7f84179483b764fbb18dc4c44f39da6527a0a16485c7ae519f00e687f"}}]
 EOF
 RUN
 
@@ -1828,5 +1828,120 @@ Fnc Mask  0x001f   ff
 Sig Mask  0x001f  ^ff
 Fnc Bytes 0x001f   48
 Sig Bytes 0x001f  ^45
+EOF
+RUN
+
+NAME=verify za overwrites old
+FILE=-
+CMDS=<<EOF
+za main b 11111111111111111111111111111111
+za main n sym.name1
+za main g cc=1 nbbs=1 edges=1 ebbs=1 bbsum=1
+za main o 0x11111111
+za main r ref1
+za main x xref1
+za main h 1111111111111111111111111111111111111111111111111111111111111111
+za main v var1
+za main b 22222222222222222222222222222222
+za main n sym.name2
+za main g cc=2 nbbs=2 edges=2 ebbs=2 bbsum=2
+za main o 0x22222222
+za main r ref2
+za main x xref2
+za main h 2222222222222222222222222222222222222222222222222222222222222222
+za main v var2
+z
+EOF
+EXPECT=<<EOF
+main:
+  bytes: 22222222222222222222222222222222
+  mask: ffffffffffffffffffffffffffffffff
+  graph: cc=2 nbbs=2 edges=2 ebbs=2 bbsum=2
+  addr: 0x22222222
+  realname: sym.name2
+  refs: ref2
+  xrefs: xref2
+  vars: var2
+  bbhash: 2222222222222222222222222222222222222222222222222222222222222222
+EOF
+RUN
+
+NAME=zac creates collision signatures
+FILE=-
+CMDS=<<EOF
+za sym.collide1 g cc=1 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.collide1 b 4433444444444444:ff00ffffffffffff
+za sym.collide2 g cc=1 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.collide3 g cc=1 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.collide2 b 4422444444444444:ff00ffffffffffff
+za sym.collide4 g cc=1 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.collide5 g cc=1 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.other1 g cc=0 nbbs=2 edges=3 ebbs=4 bbsum=5
+za sym.other1 b 4422444444444445:ff00ffffffffffff
+za sym.other2 g cc=2 nbbs=2 edges=3 ebbs=4 bbsum=5
+zac
+z*~sym.collide1 C
+z*~sym.collide2 C
+EOF
+EXPECT=<<EOF
+za sym.collide1 C b:sym.collide2 g:sym.collide2 g:sym.collide3 g:sym.collide4 g:sym.collide5
+za sym.collide2 C b:sym.collide1 g:sym.collide1 g:sym.collide3 g:sym.collide4 g:sym.collide5
+EOF
+RUN
+
+NAME=collisions detected and prevents renaming function
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afn badname
+zaf
+afn badname2
+f-badname
+zaf
+afn main
+f-badname2
+af- $$
+zac
+z/
+afl~main?
+zi~sign.bytes_collision.badname_1?
+zi~sign.graph_collision.badname_1?
+zi~sign.bytes_collision.badname2_1?
+zi~sign.graph_collision.badname2_1?
+EOF
+EXPECT=<<EOF
+1
+1
+1
+1
+1
+EOF
+RUN
+
+NAME=Rename when collision intersection unique
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afn newname
+zaf
+f- newname
+afn badbytes
+zaf
+za badbytes b 444444
+f- badbytes
+afn badgraph
+zaf
+za badgraph g cc=100 nbbs=2 edges=3 ebbs=8 bbsum=100
+afn main
+f- badgraph
+af- main
+zac
+z/
+afl~newname?
+EOF
+EXPECT=<<EOF
+1
 EOF
 RUN

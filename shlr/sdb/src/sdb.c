@@ -662,6 +662,7 @@ SDB_API int sdb_set(Sdb* s, const char *key, const char *val, ut32 cas) {
 
 static bool sdb_foreach_list_cb(void *user, const char *k, const char *v) {
 	SdbList *list = (SdbList *)user;
+// 	list->free = (SdbListFree)sdbkv_free;
 	SdbKv *kv = R_NEW0 (SdbKv);
 	/* seems like some k/v are constructed in the stack and cant be used after returning */
 	kv->base.key = strdup (k);
@@ -802,6 +803,9 @@ SDB_API bool sdb_foreach(Sdb* s, SdbForeachCallback cb, void *user) {
 		return false;
 	}
 	s->depth++;
+	if (s->gp) {
+		return s->gp->foreach ((GperfForeachCallback)cb, user);
+	}
 	bool result = sdb_foreach_cdb (s, cb, NULL, user);
 	if (!result) {
 		return sdb_foreach_end (s, false);

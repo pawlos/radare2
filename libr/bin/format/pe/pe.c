@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2019 nibble, pancake, inisider */
+/* radare - LGPL - Copyright 2008-2021 nibble, pancake, inisider */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,13 +171,13 @@ struct r_bin_pe_addr_t *PE_(check_msvcseh)(struct PE_(r_bin_pe_obj_t) *bin) {
 			// 5D                    pop ebp
 			// C3                    ret
 			follow_offset (entry, bin->b, b, sizeof (b), bin->big_endian, 8);
-			for (n = 0; n < sizeof (b) - 15; n++) {
+			for (n = 0; n + 16 < sizeof (b); n++) {
 				// E8 xx xx xx xx    call sub.ucrtbased.dll__register_thread_local_exe_atexit_callback
 				// 83 C4 04          add esp, 4
 				// E8 xx xx xx xx    call xxxxxxxx <- Follow this
 				// 89 xx xx          mov dword [xxxx], eax
 				// E8 xx xx xx xx    call xxxxxxxx
-				if (b[n] == 0xe8 && n + 8 < sizeof (b) && !memcmp (b + n + 5, "\x83\xc4\x04", 3) 
+				if (b[n] == 0xe8 && n + 8 <= sizeof (b) && !memcmp (b + n + 5, "\x83\xc4\x04", 3) 
 					&& b[n + 8] == 0xe8 && b[n + 13] == 0x89 && b[n + 16] == 0xe8) {
 					follow_offset (entry, bin->b, b, sizeof (b), bin->big_endian, n + 8);
 					int j, calls = 0;

@@ -211,6 +211,7 @@ R_API void r_cons_color(int fg, int r, int g, int b) {
 }
 
 R_API void r_cons_println(const char* str) {
+	// this is not thread safe!
 	r_cons_print (str);
 	r_cons_newline ();
 }
@@ -854,6 +855,7 @@ R_API void r_cons_context_load(RConsContext *context) {
 
 R_API void r_cons_context_reset(void) {
 	I.context = &r_cons_context_default;
+	I.context->sorted_column = -1;
 }
 
 R_API bool r_cons_context_is_main(void) {
@@ -913,6 +915,53 @@ R_API void r_cons_eflush(void) {
 	}
 }
 
+// TODO: must be called twice to remove all unnecessary reset codes. maybe adding the last two words would be faster
+// TODO remove all the strdup
+// TODO remove the slow memmove
+static void optimize(void) {
+	char *buf = CTX (buffer);
+	int len = CTX (buffer_len);
+	int i, codes = 0;
+	int escape_n = 0;
+	char escape[32];
+	bool onescape = false;
+	char *oldstr = NULL;
+	for (i = 0; i < len; i++) {
+		if (onescape) {
+			escape[escape_n++] = buf[i];
+			escape[escape_n] = 0;
+			if (buf[i] == 'm' || buf[i] == 'K' || buf[i] == 'L') {
+				int pos = (i - escape_n);
+			// 	eprintf ("JJJ(%s) (%s)%c", escape + 1, oldstr?oldstr+1:"", 10);
+				if (oldstr && !strcmp (escape, oldstr)) {
+					// trim str
+					memmove (buf + pos + 1, buf + i + 1, len - i + 1);
+					i -= escape_n - 1;
+					len -= escape_n;
+				}
+				free (oldstr);
+				oldstr = strdup (escape);
+			//	eprintf ("ERN (%d) %s%c", pos, escape, 10);
+				onescape = false;
+			} else {
+				if (escape_n + 1 >= sizeof(escape)) {
+					escape_n = 0;
+					onescape = false;
+				}
+			}
+		} else if (buf[i] == 0x1b) {
+			escape_n = 0;
+			onescape = true;
+			escape[escape_n++] = buf[i];
+			escape[escape_n] = 0;
+			codes++;
+		}
+	}
+	// eprintf ("FROM %d TO %d (%d)%c", I.context->buffer_len, len, codes, 10);
+	I.context->buffer_len = len;
+	free (oldstr);
+}
+
 R_API void r_cons_flush(void) {
 	const char *tee = I.teefile;
 	if (I.noflush) {
@@ -935,6 +984,13 @@ R_API void r_cons_flush(void) {
 		memcpy (CTX (lastOutput), CTX (buffer), CTX (buffer_len));
 	} else {
 		CTX (lastMode) = false;
+	}
+	if (I.optimize) {
+		// compress output (45 / 250 KB)
+		optimize ();
+		if (I.optimize > 1) {
+			optimize ();
+		}
 	}
 	r_cons_filter ();
 	if (r_cons_is_interactive () && I.fdout == 1) {

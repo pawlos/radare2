@@ -24,8 +24,11 @@ SDB=$(SDB_PATH)/sdb
 
 gperfs:
 	PATH=$(SDB_PATH):$$PATH $(MAKE) -C d all
-	PATH=$(SDB_PATH):$$PATH cd d && for a in *.sdb ; do test $$a -nt `echo $$a.c|sed -e 's,.sdb,,'`; if [ $$? = 0 ]; then $(SDB) -C $$a ; fi ; done
-	
+ifeq ($(HAVE_GPERF),1)
+	PATH=$(SDB_PATH):$$PATH cd d && for a in *.sdb ; do test $$a -nt `echo $$a.c|sed -e 's,.sdb,,'`; if [ $$? = 0 ]; then $(SDB) -t -C $$a ; fi ; done
+else
+	PATH=$(SDB_PATH):$$PATH cd d && for a in *.sdb ; do test $$a -nt `echo $$a.c|sed -e 's,.sdb,,'`; if [ $$? = 0 ]; then $(SDB) -t -C $$a ; fi ; done
+endif
 
 plugins: ${LIBSO} ${LIBAR}
 	$(MAKE) -C d all
@@ -48,6 +51,7 @@ STATIC_OBJS=$(subst ..,p/..,$(subst asm_,p/asm_,$(STATIC_OBJ)))
 OBJS=${STATIC_OBJS} asm.o acode.o aop.o binutils_as.o aplugs.o
 OBJS+=${SHARED2_OBJ}
 
+ifeq ($(HAVE_GPERF),1)
 OBJS+=d/z80.o
 OBJS+=d/6502.o
 OBJS+=d/i4004.o
@@ -73,5 +77,6 @@ OBJS+=d/arm.o
 OBJS+=d/msp430.o
 OBJS+=d/propeller.o
 OBJS+=d/pic18c.o
+endif
 
 include $(TOP)/libr/rules.mk

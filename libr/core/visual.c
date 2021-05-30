@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2020 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include <r_core.h>
 #include <r_cons.h>
@@ -8,6 +8,7 @@
 
 static void visual_refresh(RCore *core);
 
+// remove globals pls
 static int obs = 0;
 static int blocksize = 0;
 static bool autoblocksize = true;
@@ -2204,7 +2205,7 @@ R_API void r_core_visual_browse(RCore *core, const char *input) {
 			r_core_visual_config (core);
 			break;
 		case 'E': // "vbe"
-			r_core_visual_esil (core);
+			r_core_visual_esil (core, NULL);
 			break;
 		case 'c': // "vbc"
 			r_core_visual_classes (core);
@@ -2575,7 +2576,8 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 		break;
 		case '!':
 			r_core_panels_root (core, core->panels_root);
-			break;
+			setcursor (core, false);
+			return false;
 		case 'g':
 			r_core_visual_showcursor (core, true);
 			r_core_visual_offset (core);
@@ -2753,6 +2755,11 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 			ut64 oaddr = core->offset;
 			int delta = (core->print->ocur != -1)? R_MIN (core->print->cur, core->print->ocur): core->print->cur;
 			ut64 addr = core->offset + delta;
+			if (!canWrite (core, addr)) {
+				r_cons_printf ("\nFile has been opened in read-only mode. Use -w flag, oo+ or e io.cache=true\n");
+				r_cons_any_key (NULL);
+				return true;
+			}
 			if (PIDX == 0) {
 				if (strstr (printfmtSingle[0], "pxb")) {
 					r_core_visual_define (core, "1", 1);
@@ -2777,11 +2784,6 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					}
 					return true;
 				}
-			}
-			if (!canWrite (core, addr)) {
-				r_cons_printf ("\nFile has been opened in read-only mode. Use -w flag, oo+ or e io.cache=true\n");
-				r_cons_any_key (NULL);
-				return true;
 			}
 			r_core_visual_showcursor (core, true);
 			r_cons_flush ();
@@ -3297,15 +3299,19 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 							r_config_get_i (core->config, "stack.size") - w);
 					}
 				} else {
+					if (!canWrite (core, core->offset)) {
+						r_cons_printf ("\nFile has been opened in read-only mode. Use -w flag, oo+ or e io.cache=true\n");
+						r_cons_any_key (NULL);
+						return true;
+					}
 					if (core->print->ocur == -1) {
-						sprintf (buf, "wos 01 @ $$+%i!1",core->print->cur);
+						r_core_cmdf (core, "wos 01 @ $$+%i!1", core->print->cur);
 					} else {
-						sprintf (buf, "wos 01 @ $$+%i!%i", core->print->cur < core->print->ocur
+						r_core_cmdf (core, "wos 01 @ $$+%i!%i", core->print->cur < core->print->ocur
 							? core->print->cur
 							: core->print->ocur,
 							R_ABS (core->print->ocur - core->print->cur) + 1);
 					}
-					r_core_cmd (core, buf, 0);
 				}
 			} else {
 				if (!autoblocksize) {
@@ -3327,15 +3333,19 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 							r_config_get_i (core->config, "stack.size") + w);
 					}
 				} else {
+					if (!canWrite (core, core->offset)) {
+						r_cons_printf ("\nFile has been opened in read-only mode. Use -w flag, oo+ or e io.cache=true\n");
+						r_cons_any_key (NULL);
+						return true;
+					}
 					if (core->print->ocur == -1) {
-						sprintf (buf, "woa 01 @ $$+%i!1", core->print->cur);
+						r_core_cmdf (core, "woa 01 @ $$+%i!1", core->print->cur);
 					} else {
-						sprintf (buf, "woa 01 @ $$+%i!%i", core->print->cur < core->print->ocur
+						r_core_cmdf (core, "woa 01 @ $$+%i!%i", core->print->cur < core->print->ocur
 							? core->print->cur
 							: core->print->ocur,
 							R_ABS (core->print->ocur - core->print->cur) + 1);
 					}
-					r_core_cmd (core, buf, 0);
 				}
 			} else {
 				if (!autoblocksize) {
@@ -4048,6 +4058,7 @@ static void visual_refresh(RCore *core) {
 	}
 	r_cons_flush ();
 	r_cons_print_clear ();
+	r_cons_singleton ()->noflush = true;
 
 	int hex_cols = r_config_get_i (core->config, "hex.cols");
 	int split_w = 12 + 4 + hex_cols + (hex_cols * 3);
@@ -4142,7 +4153,7 @@ static void visual_refresh(RCore *core) {
 	}
 #endif
 	blocksize = core->num->value? core->num->value: core->blocksize;
-
+	r_cons_singleton ()->noflush = false;
 	/* this is why there's flickering */
 	if (core->print->vflush) {
 		r_cons_visual_flush ();

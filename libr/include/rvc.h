@@ -1,7 +1,14 @@
-/* radare - LGPL - Copyright 2013-2020 - RHL120, pancake */
+/* radare - LGPL - Copyright 2021 - RHL120, pancake */
+
+#ifndef R_RVC_H
+#define R_RVC_H 1
 
 #include <r_core.h>
 #include <r_util.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct blob {
 	char *fname;
@@ -38,8 +45,15 @@ R_API bool r_vc_commit(Rvc *repo, RList *blobs, const char *auth, const char *me
 R_API bool r_vc_branch(Rvc *repo, const char *name);
 R_API RList *r_vc_add(Rvc *repo, RList *files);
 R_API Rvc *r_vc_new(const char *path);
+R_API void r_vc_free(Rvc *vc);
 R_API int r_vc_git_init(const char *path);
 R_API bool r_vc_git_branch(const char *path, const char *name);
 R_API bool r_vc_git_checkout(const char *path, const char *name);
 R_API int r_vc_git_add(const char *path, const char *fname);
 R_API int r_vc_git_commit(const char *path, const char *message);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

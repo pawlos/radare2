@@ -16,8 +16,7 @@ LIBR:=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # /libr
 
 ALL?=
-CFLAGS+=-I$(LIBR)
-CFLAGS+=-I$(LIBR)/include
+CFLAGS:=-I$(LIBR) -I$(LIBR)/include $(CFLAGS)
 
 -include $(SHLR)/sdb.mk
 
@@ -34,7 +33,7 @@ SRC=$(subst .o,.c,$(OBJ))
 BEXE=$(BIN)$(EXT_EXE)
 
 ifeq ($(USE_RPATH),1)
-LINK+=-Wl,-rpath "${LIBDIR}"
+LINK+=-Wl,-rpath,"${LIBDIR}"
 endif
 
 ifeq (${OSTYPE},gnulinux)
@@ -72,9 +71,11 @@ else
 all: ${LIBSO} ${LIBAR} ${EXTRA_TARGETS}
 endif
 ifneq ($(SILENT),)
-	@-if [ -f p/Makefile ]; then (cd p && ${MAKE}) ; fi
+	@-if [ -f p/Makefile ]; then ${MAKE} -C p ; fi
+	@-if [ -f d/Makefile ]; then ${MAKE} -C d ; fi
 else
-	@-if [ -f p/Makefile ] ; then (echo "DIR ${NAME}/p"; cd p && ${MAKE}) ; fi
+	@-if [ -f p/Makefile ] ; then (echo "DIR ${NAME}/p"; ${MAKE} -C p) ; fi
+	@-if [ -f d/Makefile ] ; then (echo "DIR ${NAME}/d"; ${MAKE} -C d) ; fi
 endif
 
 ifeq ($(WITH_LIBS),1)

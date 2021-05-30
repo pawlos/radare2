@@ -1,4 +1,4 @@
-project('radare2', 'c', license : 'LGPL3', meson_version : '>=0.50.1', version : '5.3.0')
+project('radare2', 'c', license : 'LGPL3', meson_version : '>=0.49', version : '5.3.0')
 
 py3_exe = import('python').find_installation('python3')
 git_exe = find_program('git', required: false)
@@ -10,10 +10,7 @@ vers = r2_version.split('.')
 r2_version_major = vers[0].to_int()
 r2_version_minor = vers[1].to_int()
 r2_version_patch = vers[2].split('-')[0].to_int()
-r2_version_number \
-  = (r2_version_major * 10000) \
-  + (r2_version_minor * 100) \
-  + (r2_version_patch)
+r2_version_number = (r2_version_major * 10000) + (r2_version_minor * 100) + (r2_version_patch)
 
 repo = '.'
 if meson.is_subproject()
@@ -222,6 +219,13 @@ conf_data.set('plugins_debug', '&r_debug_plugin_' + ', &r_debug_plugin_'.join(de
 conf_data.set('plugins_egg', '&r_egg_plugin_' + ', &r_egg_plugin_'.join(egg_plugins) + ', 0')
 conf_data.set('plugins_lang', '&r_lang_plugin_' + ', &r_lang_plugin_'.join(lang_plugins) + ', 0')
 conf_data.set('plugins_parse', '&r_parse_plugin_' + ', &r_parse_plugin_'.join(parse_plugins) + ', 0')
+
+# userconf_h = configure_file(
+#  input: 'libr/include/r_userconf.h.acr',
+#  output: 'r_userconf.h',
+#  configuration: conf_data
+#)
+
 config_h = configure_file(
   input: 'libr/config.h.in',
   output: 'config.h',
@@ -237,8 +241,11 @@ if sys_magic.found() and get_option('use_sys_magic')
 endif
 
 # handle xxhash library
-sys_xxhash = dependency('xxhash', required: false)
+sys_xxhash = dependency('libxxhash', required: false)
 use_sys_xxhash = false
+if not sys_xxhash.found()
+  sys_xxhash = dependency('xxhash', required: false)
+endif
 if not sys_xxhash.found()
   sys_xxhash = cc.find_library('xxhash', required: false)
 endif
@@ -526,6 +533,15 @@ sdb_exe = executable('sdb', ['shlr/sdb/src/main.c'] + sdb_files,
   native: true,
 )
 
+sdb_gen_cmd_cgen = [
+  sdb_exe,
+  '-t',
+  '-C',
+  '-o',
+  '@OUTPUT@',
+  '@INPUT@'
+]
+
 sdb_gen_cmd = [
   sdb_exe,
   '@OUTPUT@',
@@ -593,10 +609,10 @@ subdir('libr/fs')
 subdir('libr/debug')
 subdir('libr/core')
 
-subdir('libr/anal/d')
-subdir('libr/asm/d')
+# subdir('libr/anal/d')
+# subdir('libr/asm/d')
 subdir('libr/bin/d')
-subdir('libr/syscall/d')
+# subdir('libr/syscall/d')
 subdir('libr/cons/d')
 subdir('libr/magic/d')
 subdir('libr/flag/d')
@@ -622,6 +638,7 @@ if cli_enabled
     subdir('binr/radiff2')
     subdir('binr/rafind2')
     subdir('binr/rasign2')
+    subdir('binr/rvc2')
     subdir('binr/rax2')
   endif
   subdir('binr/r2pm')
@@ -689,6 +706,7 @@ if cli_enabled
     'man/rarun2.1',
     'man/rasm2.1',
     'man/rax2.1',
+    'man/rvc2.1',
     'man/esil.7'
   )
 
@@ -709,5 +727,9 @@ if cli_enabled
     install_dir: r2_zsh_compdir
   )
 
-  meson.add_install_script(host_machine.system() == 'windows' ? 'sys/create_r2.bat' : 'sys/create_r2.sh')
+  if host_machine.system() == 'windows'
+    meson.add_install_script('sys/create_r2.bat')
+  else
+    meson.add_install_script('sys/create_r2.sh')
+  endif
 endif

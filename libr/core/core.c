@@ -1,8 +1,9 @@
-/* radare2 - LGPL - Copyright 2009-2020 - pancake */
+/* radare2 - LGPL - Copyright 2009-2021 - pancake */
 
 #include <r_core.h>
 #include <r_socket.h>
 #include <config.h>
+#include <r_config.h>
 #include <r_util.h>
 #if __UNIX__
 #include <signal.h>
@@ -1646,6 +1647,20 @@ static void autocomplete_ms_file(RCore* core, RLineCompletion *completion, const
 	}
 }
 
+static void autocomplete_charsets(RCore *core, RLineCompletion *completion, const char *str) {
+	r_return_if_fail (str);
+	int len = strlen (str);
+	char *name;
+	RListIter *iter;
+	RList *chs = r_charset_list (core->print->charset);
+	r_list_foreach (chs, iter, name) {
+		if (!len || !strncmp (str, name, len)) {
+			r_line_completion_push (completion, name);
+		}
+	}
+	r_list_free (chs);
+}
+
 static void autocomplete_theme(RCore *core, RLineCompletion *completion, const char *str) {
 	r_return_if_fail (str);
 	int len = strlen (str);
@@ -1661,54 +1676,41 @@ static void autocomplete_theme(RCore *core, RLineCompletion *completion, const c
 }
 
 static bool find_e_opts(RCore *core, RLineCompletion *completion, RLineBuffer *buf) {
-	const char *pattern = "e (.*)=";
-	RRegex *rx = r_regex_new (pattern, "e");
-	const size_t nmatch = 2;
-	RRegexMatch pmatch[2] = {0};
-	bool ret = false;
-
 	// required to get the new list of items to autocomplete for cmd.pdc at least
 	r_core_config_update (core);
-
-	if (r_regex_exec (rx, buf->data, nmatch, pmatch, 1)) {
-		goto out;
+	char *str = (char *)r_str_trim_head_ro (buf->data + 1);
+	char *eq = strchr (str, '=');
+	if (!eq) {
+		return false;
 	}
-	int i;
-	char *str = NULL, *sp;
-	for (i = pmatch[1].rm_so; i < pmatch[1].rm_eo; i++) {
-		str = r_str_appendch (str, buf->data[i]);
-	}
-	if (!str) {
-		goto out;
-	}
-	if ((sp = strchr (str, ' '))) {
-		// if the name contains a space, just null
-		*sp = 0;
-	}
-	RConfigNode *node = r_config_node_get (core->config, str);
-	if (sp) {
-		// if nulled, then restore.
-		*sp = ' ';
-	}
+	*eq = 0;
+	char *k = r_str_trim_dup (str);
+	RConfigNode *node = r_config_node_get (core->config, k);
+	free (k);
+	*eq = '=';
 	if (!node) {
 		return false;
 	}
-	RListIter *iter;
-	char *option;
-	char *p = (char *) strchr (buf->data, '=');
-	p = r_str_ichr (p + 1, ' ');
+	const char *p = r_str_trim_head_ro (eq + 1);
 	int n = strlen (p);
-	r_list_foreach (node->options, iter, option) {
-		if (!strncmp (option, p, n)) {
-			r_line_completion_push (completion, option);
+	if (node->flags & 1) {
+		if (!strncmp ("true", p, n)) {
+			r_line_completion_push (completion, "true");
+		}
+		if (!strncmp ("false", p, n)) {
+			r_line_completion_push (completion, "false");
+		}
+	} else {
+		RListIter *iter;
+		char *option;
+		r_list_foreach (node->options, iter, option) {
+			if (!strncmp (option, p, n)) {
+				r_line_completion_push (completion, option);
+			}
 		}
 	}
 	completion->opt = true;
-	ret = true;
-
- out:
-	r_regex_free (rx);
-	return ret;
+	return true;
 }
 
 static bool find_autocomplete(RCore *core, RLineCompletion *completion, RLineBuffer *buf) {
@@ -1784,6 +1786,9 @@ static bool find_autocomplete(RCore *core, RLineCompletion *completion, RLineBuf
 		break;
 	case R_CORE_AUTOCMPLT_THME:
 		autocomplete_theme (core, completion, p);
+		break;
+	case R_CORE_AUTOCMPLT_CHRS:
+		autocomplete_charsets (core, completion, p);
 		break;
 	case R_CORE_AUTOCMPLT_SDB:
 		autocomplete_sdb (core, completion, p);
@@ -2802,6 +2807,8 @@ R_API bool r_core_init(RCore *core) {
 	core->printidx = 0;
 	core->lastcmd = NULL;
 	core->cmdlog = NULL;
+
+	sdb_free (core->print->charset->db);
 	core->print->charset->db = sdb_ns (core->sdb, "charset", 1);
 	core->print->charset->db->refs++; // increase reference counter to avoid double-free
 	// ideally sdb_ns_set should be used here, but it doesnt seems to work well. must fix
@@ -3722,19 +3729,19 @@ R_API char *r_core_editor(const RCore *core, const char *file, const char *str) 
 }
 
 /* weak getters */
-R_API RCons *r_core_get_cons (RCore *core) {
+R_API RCons *r_core_get_cons(RCore *core) {
 	return core->cons;
 }
 
-R_API RConfig *r_core_get_config (RCore *core) {
+R_API RConfig *r_core_get_config(RCore *core) {
 	return core->config;
 }
 
-R_API RBin *r_core_get_bin (RCore *core) {
+R_API RBin *r_core_get_bin(RCore *core) {
 	return core->bin;
 }
 
-R_API RBuffer *r_core_syscallf (RCore *core, const char *name, const char *fmt, ...) {
+R_API RBuffer *r_core_syscallf(RCore *core, const char *name, const char *fmt, ...) {
 	char str[1024];
 	RBuffer *buf;
 	va_list ap;
@@ -3747,10 +3754,9 @@ R_API RBuffer *r_core_syscallf (RCore *core, const char *name, const char *fmt, 
 	return buf;
 }
 
-R_API RBuffer *r_core_syscall (RCore *core, const char *name, const char *args) {
+R_API RBuffer *r_core_syscall(RCore *core, const char *name, const char *args) {
 	RBuffer *b = NULL;
 	char code[1024];
-	int num;
 
 	//arch check
 	if (strcmp (core->anal->cur->arch, "x86")) {
@@ -3758,7 +3764,7 @@ R_API RBuffer *r_core_syscall (RCore *core, const char *name, const char *args) 
 		return 0;
 	}
 
-	num = r_syscall_get_num (core->anal->syscall, name);
+	int num = r_syscall_get_num (core->anal->syscall, name);
 
 	//bits check
 	switch (core->rasm->bits) {
@@ -3920,6 +3926,5 @@ R_API PJ *r_core_pj_new(RCore *core) {
 	} else if (!strcmp ("strip", config_string_encoding)) {
 		string_encoding = PJ_ENCODING_STR_STRIP;
 	}
-
 	return pj_new_with_encoding (string_encoding, number_encoding);
 }

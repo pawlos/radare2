@@ -488,7 +488,7 @@ static bool store_files_and_maps(RCore *core, RIODesc *desc, ut32 id) {
 }
 #endif
 
-static bool project_save_script(RCore *core, const char *file, int opts) {
+R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
 	char *filename, *hl, *ohl = NULL;
 	int fdold;
 
@@ -601,32 +601,25 @@ static bool project_save_script(RCore *core, const char *file, int opts) {
 	return true;
 }
 
-R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
-	return project_save_script (core, file, opts);
-}
-
 R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 	bool scr_null = false;
 	bool ret = true;
 	SdbListIter *it;
 	SdbNs *ns;
 	r_return_val_if_fail (prj_name && *prj_name, false);
-	char *script_path = get_project_script_path (core, prj_name);
+
 	if (r_config_get_b (core->config, "cfg.debug")) {
 		eprintf ("radare2 does not support projects on debugged bins.\n");
 		return false;
 	}
+	char *script_path = get_project_script_path (core, prj_name);
 	if (!script_path) {
 		eprintf ("Invalid project name '%s'\n", prj_name);
 		return false;
 	}
-	char *prj_dir = NULL;
-	if (r_str_endswith (script_path, R_SYS_DIR "rc.r2")) {
-		/* new project format */
-		prj_dir = r_file_dirname (script_path);
-	} else {
-		prj_dir = r_str_newf ("%s.d", script_path);
-	}
+	char *prj_dir = r_str_endswith (script_path, R_SYS_DIR "rc.r2")
+		? r_file_dirname (script_path)
+		: r_str_newf ("%s.d", script_path);
 	if (r_file_exists (script_path)) {
 		if (r_file_is_directory (script_path)) {
 			eprintf ("Structural error: rc.r2 shouldnt be a directory.\n");
@@ -635,7 +628,15 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 	if (!prj_dir) {
 		prj_dir = strdup (prj_name);
 	}
-	if (!r_file_exists (prj_dir)) {
+	if (r_core_is_project (core, prj_name)
+			&& strcmp (prj_name,
+				r_config_get (core->config, "prj.name"))) {
+		eprintf ("A project with this name already exists\n");
+		free (script_path);
+		free (prj_dir);
+		return false;
+	}
+	if (!r_file_is_directory (prj_dir)) {
 		r_sys_mkdirp (prj_dir);
 	}
 	if (r_config_get_i (core->config, "scr.null")) {
@@ -655,9 +656,11 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 		}
 	}
 
-	if (!project_save_script (core, script_path, R_CORE_PRJ_ALL)) {
+	r_config_set (core->config, "prj.name", prj_name);
+	if (!r_core_project_save_script (core, script_path, R_CORE_PRJ_ALL)) {
 		eprintf ("Cannot open '%s' for writing\n", prj_name);
 		ret = false;
+		r_config_set (core->config, "prj.name", "");
 	}
 
 	if (r_config_get_i (core->config, "prj.files")) {
@@ -724,4 +727,45 @@ R_API char *r_core_project_notes_file(RCore *core, const char *prj_name) {
 	char *notes_txt = r_file_new (prjpath, prj_name, "notes.txt", NULL);
 	free (prjpath);
 	return notes_txt;
+}
+R_API bool r_core_project_is_saved(RCore *core) {
+	bool ret;
+	char *saved_dat, *tmp_dat;
+	char *tsp, *sp;
+	char *pd = r_str_newf ("%s" R_SYS_DIR "%s",
+			r_config_get (core->config, "dir.projects"),
+			r_config_get (core->config, "prj.name"));
+	if (!pd) {
+		return false;
+	}
+	sp = r_str_newf ("%s" R_SYS_DIR "%s", pd, "rc.r2");
+	if (!sp) {
+		free (pd);
+		return false;
+	}
+	tsp = r_str_newf ("%s" R_SYS_DIR "tmp", pd);
+	//horrible code follows:
+	free (pd);
+	if (!tsp) {
+		free (sp);
+		return false;
+	}
+	r_core_project_save_script (core, tsp, R_CORE_PRJ_ALL);
+	saved_dat = r_file_slurp (sp, 0);
+	free (sp);
+	if (!saved_dat) {
+		free (tsp);
+		return false;
+	}
+ 	//Would be better if I knew how to map files in mem in windows
+	tmp_dat = r_file_slurp (tsp, 0);
+	r_file_rm (tsp);
+	free (tsp);
+	if (!tmp_dat) {
+		return false;
+	}
+	ret = !strcmp (tmp_dat, saved_dat);
+	free (tmp_dat);
+	free (saved_dat);
+	return ret;
 }

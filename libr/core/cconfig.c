@@ -745,6 +745,9 @@ static bool cb_asmbits(void *user, void *data) {
 	}
 
 	int bits = node->i_value;
+	if (!bits) {
+		return false;
+	}
 #if 0
 // TODO: pretty good optimization, but breaks many tests when arch is different i think
 	if (bits == core->rasm->bits && bits == core->anal->bits && bits == core->dbg->bits) {
@@ -967,6 +970,18 @@ static bool cb_asmos(void *user, void *data) {
 	return true;
 }
 
+static void update_cfgcharsets_options(RCore *core, RConfigNode *node) {
+	// static void autocomplete_charsets(RCore *core, RLineCompletion *completion, const char *str) {
+	char *name;
+	RListIter *iter;
+	RList *chs = r_charset_list (core->print->charset);
+	r_config_node_purge_options (node);
+	r_list_foreach (chs, iter, name) {
+		SETOPTIONS (node, name, NULL);
+	}
+	r_list_free (chs);
+}
+
 static void update_asmparser_options(RCore *core, RConfigNode *node) {
 	RListIter *iter;
 	RParsePlugin *parser;
@@ -986,7 +1001,6 @@ static bool cb_asmparser(void *user, void *data) {
 		print_node_options (node);
 		return false;
 	}
-
 	return r_parse_use (core->parser, node->value);
 }
 
@@ -1214,20 +1228,17 @@ static bool cb_cfgcharset(void *user, void *data) {
 		r_charset_close (core->print->charset);
 		return true;
 	}
-
-	const char *cs = R2_PREFIX R_SYS_DIR R2_SDB R_SYS_DIR "charsets" R_SYS_DIR;
 	bool rc = false;
 	if (*cf == '?') {
+		const char *cs = R2_PREFIX R_SYS_DIR R2_SDB R_SYS_DIR "charsets" R_SYS_DIR;
 		list_available_plugins (cs);
 	} else {
-		char *syscs = r_str_newf ("%s%s.sdb", cs, cf);
-		if (r_file_exists (syscs)) {
-			rc = r_charset_open (core->print->charset, syscs);
+		rc = r_charset_use (core->print->charset, cf);
+		if (rc) {
+			r_sys_setenv ("RABIN2_CHARSET", cf);
+		} else {
+			eprintf ("Warning: Cannot load charset file '%s'.\n", cf);
 		}
-		if (!rc) {
-			eprintf ("Warning: Cannot load charset file '%s' '%s'.\n", syscs, cf);
-		}
-		free (syscs);
 	}
 	return rc;
 }
@@ -2238,6 +2249,13 @@ static bool cb_scrbreakword(void* user, void* data) {
 	return true;
 }
 
+static bool cb_scroptimize(void* user, void* data) {
+	RConfigNode *node = (RConfigNode*) data;
+	RCore *core = (RCore*) user;
+	core->cons->optimize = node->i_value;
+	return true;
+}
+
 static bool cb_scrcolumns(void* user, void* data) {
 	RConfigNode *node = (RConfigNode*) data;
 	RCore *core = (RCore*) user;
@@ -3073,7 +3091,6 @@ static bool cb_prjvctype(void *user, void *data) {
 		if (found) {
 			return true;
 		}
-		eprintf ("Git is not installed\n");
 		return false;
 	}
 	if (!strcmp (node->value, "rvc")) {
@@ -3459,7 +3476,8 @@ R_API int r_core_config_init(RCore *core) {
 	SETBPREF ("prj.gpg", "false", "TODO: Encrypt project with GnuPGv2");
 
 	/* cfg */
-	SETCB ("cfg.charset", "", &cb_cfgcharset, "Specify encoding to use when printing strings");
+	n = SETCB ("cfg.charset", "", &cb_cfgcharset, "Specify encoding to use when printing strings");
+	update_cfgcharsets_options (core, n);
 	SETBPREF ("cfg.r2wars", "false", "Enable some tweaks for the r2wars game");
 	SETBPREF ("cfg.plugins", "true", "Load plugins at startup");
 	SETCB ("time.fmt", "%Y-%m-%d %H:%M:%S %z", &cb_cfgdatefmt, "Date format (%Y-%m-%d %H:%M:%S %z)");
@@ -3553,7 +3571,7 @@ R_API int r_core_config_init(RCore *core) {
 		free (path);
 	}
 	SETCB ("dir.source", "", &cb_dirsrc, "Path to find source files");
-	SETPREF ("dir.types", "/usr/include", "Default path to look for cparse type files");
+	SETPREF ("dir.types", "/usr/include", "Default colon-separated list of paths to find C headers to cparse types");
 	SETPREF ("dir.libs", "", "Specify path to find libraries to load when bin.libs=true");
 	p = r_sys_getenv (R_SYS_HOME);
 	SETCB ("dir.home", r_str_get_fail (p, "/"), &cb_dirhome, "Path for the home directory");
@@ -3847,6 +3865,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETCB ("scr.gadgets", "true", &cb_scr_gadgets, "Run pg in prompt, visual and panels");
 	SETBPREF ("scr.panelborder", "false", "Specify panels border active area (0 by default)");
 	SETICB ("scr.columns", 0, &cb_scrcolumns, "Force console column count (width)");
+	SETICB ("scr.optimize", 0, &cb_scroptimize, "Optimize the amount of ansi escapes and spaces (0, 1, 2 passes)");
 	SETBPREF ("scr.dumpcols", "false", "Prefer pC commands before p ones");
 	SETCB ("scr.rows", "0", &cb_scrrows, "Force console row count (height) ");
 	SETICB ("scr.rows", 0, &cb_rows, "Force console row count (height) (duplicate?)");
@@ -3999,7 +4018,7 @@ R_API int r_core_config_init(RCore *core) {
 		if (!found) {
 			SETCB ("prj.vc.type", "git", &cb_prjvctype, "What should projects use as a vc");
 		} else {
-			SETCB ("prj.vc.type", "git", &cb_prjvctype, "What should projects use as a vc");
+			//SETCB ("prj.vc.type", "rvc", &cb_prjvctype, "What should projects use as a vc"); //l8er
 		}
 		free (p);
 	}

@@ -155,6 +155,15 @@ static const char *help_msg_ad[] = {
 	NULL
 };
 
+static const char *help_msg_aei[] = {
+	"Usage:", "aei", "[smp] [...]",
+	"aei", "", "initialize ESIL VM state (aei- to deinitialize)",
+	"aeis", " argc [argv] [envp]", "initialize entrypoint stack environment",
+	"aeim", " [addr] [size] [name]", "initialize ESIL VM stack (aeim- remove)",
+	"aeip", "", "initialize ESIL program counter to curseek",
+	NULL
+};
+
 static const char *help_msg_ae[] = {
 	"Usage:", "ae[idesr?] [arg]", "ESIL code emulation",
 	"ae", " [expr]", "evaluate ESIL expression",
@@ -173,6 +182,7 @@ static const char *help_msg_ae[] = {
 	"aeg", " [expr]", "esil data flow graph",
 	"aegf", " [expr] [register]", "esil data flow graph filter",
 	"aei", "", "initialize ESIL VM state (aei- to deinitialize)",
+	"aeis", " argc [argv] [envp]", "initialize entrypoint stack environment",
 	"aeim", " [addr] [size] [name]", "initialize ESIL VM stack (aeim- remove)",
 	"aeip", "", "initialize ESIL program counter to curseek",
 	"aek", " [query]", "perform sdb query on ESIL.info",
@@ -192,6 +202,7 @@ static const char *help_msg_ae[] = {
 	"aesuo", " [optype]", "step until given opcode type",
 	"aetr", "[esil]", "Convert an ESIL Expression to REIL",
 	"aets", "[?]", "ESIL Trace session",
+	"aev", " [esil]", "visual esil debugger for the given expression or current instruction",
 	"aex", " [hex]", "evaluate opcode expression",
 	NULL
 };
@@ -355,7 +366,7 @@ static const char *help_msg_af[] = {
 	"aft", "[?]", "type matching, type propagation",
 	"afu", " addr", "resize and analyze function from current address until addr",
 	"afv[absrx]", "?", "manipulate args, registers and variables in function",
-	"afx", "", "list function references",
+	"afx", "[m]", "list function references",
 	NULL
 };
 
@@ -555,6 +566,7 @@ static const char *help_msg_ag[] = {
 	"Output formats:", "", "",
 	"<blank>", "", "Ascii art",
 	"*", "", "r2 commands",
+	"b", "", "Braile art rendering (agfb)",
 	"d", "", "Graphviz dot",
 	"g", "", "Graph Modelling Language (gml)",
 	"j", "", "json ('J' for formatted disassembly)",
@@ -3385,6 +3397,61 @@ static void cmd_afbc(RCore *core, const char *input) {
 	free (ptr);
 }
 
+// Fcn Xrefs Map
+static void xrefs_map(RCore *core, const char *input) {
+	RListIter *iter, *iter2, *iter3;
+	RAnalRef *r;
+	RAnalFunction *f, *f2;
+	int col = 0;
+	int count = 0;
+	do {
+		r_cons_print ("             ");
+		count = 0;
+		r_list_foreach (core->anal->fcns, iter, f) {
+			int nlen = strlen (f->name);
+			if (col >= nlen) {
+				r_cons_printf ("|");
+				continue;
+			}
+			count++;
+			r_cons_printf ("%c", f->name[col]);
+		}
+		r_cons_newline ();
+		col++;
+	} while (count);
+
+	int total = 0;
+	r_list_foreach (core->anal->fcns, iter, f) {
+		RList *refs = r_anal_function_get_refs (f);
+		r_cons_printf ("0x%08"PFMT64x"  ", f->addr);
+		total = 0;
+		r_list_foreach (core->anal->fcns, iter2, f2) {
+			int count = 0;
+			r_list_foreach (refs, iter3, r) {
+				if (r->addr == f2->addr) {
+					count ++;
+				}
+			}
+			if (count > 0) {
+				total++;
+				if (count < 10) {
+					r_cons_printf ("%d", count);
+				} else {
+					r_cons_printf ("+");
+				}
+			} else {
+				r_cons_printf (".");
+			}
+		}
+		if (total > 0) {
+			r_cons_printf ("  %s\n", f->name);
+		} else {
+			r_cons_printf ("\r");
+		}
+		r_list_free (refs);
+	}
+}
+
 R_API void r_core_af(RCore *core, ut64 addr, const char *name, bool anal_calls) {
 	int depth = r_config_get_i (core->config, "anal.depth");
 	RAnalFunction *fcn = NULL;
@@ -4270,6 +4337,9 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 #endif
 	case 'x': // "afx"
 		switch (input[2]) {
+		case 'm': // "afxm"
+			xrefs_map (core, input + 1);
+			break;
 		case '\0': // "afx"
 		case 'j': // "afxj"
 		case ' ': // "afx "
@@ -6057,6 +6127,49 @@ static void __core_anal_appcall(RCore *core, const char *input) {
 //	r_reg_arena_pop (core->dbg->reg);
 }
 
+static void cmd_debug_stack_init(RCore *core, int argc, char **argv, char **envp) {
+	// TODO: add support for 32 bit
+	RBuffer *b = r_buf_new ();
+	ut64 sp = core->offset;
+	int i;
+	ut64 dyld_call_from = UT64_MAX;
+	r_buf_append_ut64 (b, dyld_call_from);
+	r_buf_append_ut64 (b, 0); // rbp
+	r_buf_append_ut64 (b, argc); // rbp
+	int envp_count = 0;
+	for (i = 0; envp[i]; i++) {
+		envp_count++;
+	}
+	ut64 strp = sp + 40 + (argc * 8) + (envp_count * 8);
+	// pointer table
+	for (i = 0; i < argc && argv[i]; i++) {
+		r_buf_append_ut64 (b, strp);
+		strp += strlen (argv[i]) + 1;
+	}
+	r_buf_append_ut64 (b, 0);
+	for (i = 0; i < envp_count; i++) {
+		r_buf_append_ut64 (b, strp);
+		strp += strlen (envp[i]) + 1;
+	}
+	r_buf_append_ut64 (b, 0);
+	// string table
+	for (i = 0; i < argc && argv[i]; i++) {
+		r_buf_append_string (b, argv[i]);
+		r_buf_append_ut8 (b, 0);
+	}
+	for (i = 0; i < envp_count; i++) {
+		r_buf_append_string (b, envp[i]);
+		r_buf_append_ut8 (b, 0);
+	}
+	int slen;
+	ut8 *s = r_buf_read_all (b, &slen);
+	char *x = r_hex_bin2strdup (s, slen);
+	r_cons_printf ("wx %s\n", x);
+	free (x);
+	free (s);
+	r_buf_free (b);
+}
+
 static void __anal_esil_function(RCore *core, ut64 addr) {
 	RListIter *iter;
 	RAnalBlock *bb;
@@ -6254,6 +6367,9 @@ static void cmd_anal_esil(RCore *core, const char *input) {
 	RAnalOp *op = NULL;
 
 	switch (input[0]) {
+	case 'v': // "aev"
+		r_core_visual_esil (core, r_str_trim_head_ro (input + 1));
+		break;
 	case 'p': // "aep"
 		switch (input[1]) {
 		case 'c': // "aepc"
@@ -6525,6 +6641,45 @@ static void cmd_anal_esil(RCore *core, const char *input) {
 	case 'i': // "aei"
 		switch (input[1]) {
 		case 's': // "aeis"
+			{
+				char *arg = r_str_trim_dup (input + 2);
+				RList *args = r_str_split_list (arg, " ", 0);
+				int i, argc = atoi (r_list_pop_head (args));
+				if (argc < 1) {
+					r_core_cmd_help (core, help_msg_aei);
+					break;
+				}
+				char **argv = calloc (argc + 1, sizeof (void *));
+				for (i = 0; i < argc; i++) {
+					char *arg = r_list_pop_head (args);
+					if (!arg) {
+						break;
+					}
+					argv[i] = arg;
+				}
+				argv[i] = 0;
+				char **envp = calloc (r_list_length (args) + 1, sizeof (void *));
+				for (i = 0; ; i++) {
+					char *arg = r_list_pop_head (args);
+					if (!arg) {
+						break;
+					}
+					envp[i] = arg;
+				}
+				envp[i] = 0;
+#if __UNIX__
+				if (strstr (input, "$env")) {
+					extern char **environ;
+					cmd_debug_stack_init (core, argc, argv, environ);
+				} else {
+					cmd_debug_stack_init (core, argc, argv, envp);
+				}
+#else
+				cmd_debug_stack_init (core, argc, argv, envp);
+#endif
+				free (arg);
+			}
+			break;
 		case 'm': // "aeim"
 			cmd_esil_mem (core, input + 2);
 			break;
@@ -6532,6 +6687,7 @@ static void cmd_anal_esil(RCore *core, const char *input) {
 			r_core_cmd0 (core, "ar PC=$$");
 			break;
 		case '?':
+			r_core_cmd_help (core, help_msg_aei);
 			cmd_esil_mem (core, "?");
 			break;
 		case '-':
@@ -6567,6 +6723,10 @@ static void cmd_anal_esil(RCore *core, const char *input) {
 				}
 			}
 			break;
+		default:
+			cmd_esil_mem (core, "?");
+			break;
+
 		}
 		break;
 	case 'k': // "aek"

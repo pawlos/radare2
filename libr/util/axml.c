@@ -173,7 +173,7 @@ static char *string_lookup(string_pool_t *pool, const ut8 *data, ut64 data_size,
 			return NULL;
 		}
 
-		name = calloc (n * 2 + 1, 1);
+		name = calloc (n + 1, 2);
 
 		if ((ut64)start16 > (ut64)data + data_size - sizeof(ut32) - n - 1) {
 			free (name);
@@ -306,7 +306,11 @@ R_API char *r_axml_decode(const ut8 *data, const ut64 data_size) {
 	RStrBuf *sb = NULL;
 	st32 depth = 0;
 
-	r_return_val_if_fail (data && data_size, NULL);
+	if (!data_size) {
+		return NULL;
+	}
+
+	r_return_val_if_fail (data, NULL);
 
 	RBuffer *buffer = r_buf_new_with_pointers (data, data_size, false);
 	if (!buffer) {

@@ -176,6 +176,7 @@ typedef enum r_core_autocomplete_types_t {
 	R_CORE_AUTOCMPLT_OPTN,
 	R_CORE_AUTOCMPLT_MS,
 	R_CORE_AUTOCMPLT_SDB,
+	R_CORE_AUTOCMPLT_CHRS,
 // --- left as last always
 	R_CORE_AUTOCMPLT_END,
 } RCoreAutocompleteType;
@@ -255,6 +256,7 @@ R_API bool r_project_open(RProject *p, const char *prjname, const char *path);
 R_API void r_project_save(RProject *p);
 R_API void r_project_free(RProject *p);
 R_API bool r_project_is_loaded(RProject *p);
+R_API bool r_core_project_is_saved(RCore *core);
 
 struct r_core_t {
 	RBin *bin;
@@ -770,6 +772,7 @@ R_API void r_core_rtr_list(RCore *core);
 R_API void r_core_rtr_add(RCore *core, const char *input);
 R_API void r_core_rtr_remove(RCore *core, const char *input);
 R_API void r_core_rtr_session(RCore *core, const char *input);
+R_API void r_core_rtr_event(RCore *core, const char *input);
 R_API void r_core_rtr_cmd(RCore *core, const char *input);
 R_API int r_core_rtr_http(RCore *core, int launch, int browse, const char *path);
 R_API int r_core_rtr_http_stop(RCore *u);
@@ -789,7 +792,7 @@ R_API int r_core_visual_view_zigns(RCore *core);
 R_API int r_core_visual_view_rop(RCore *core);
 R_API int r_core_visual_comments(RCore *core);
 R_API int r_core_visual_prompt(RCore *core);
-R_API bool r_core_visual_esil (RCore *core);
+R_API bool r_core_visual_esil (RCore *core, const char *input);
 R_API int r_core_search_preludes(RCore *core, bool log);
 R_API int r_core_search_prelude(RCore *core, ut64 from, ut64 to, const ut8 *buf, int blen, const ut8 *mask, int mlen);
 R_API RList* /*<RIOMap*>*/ r_core_get_boundaries_prot (RCore *core, int protection, const char *mode, const char *prefix);
@@ -957,31 +960,31 @@ R_API bool r_core_plugin_fini(RCmd *cmd);
 /* DECOMPILER PRINTING FUNCTIONS */
 /**
  * @brief Prints the data contained in the specified RAnnotatedCode in JSON format.
- * 
+ *
  * The function will print the output in console using the function r_cons_printf();
- * 
+ *
  * @param code Pointer to a RAnnotatedCode.
  */
 R_API void r_codemeta_print_json(RCodeMeta *code);
 /**
  * @brief Prints the decompiled code from the specified RAnnotatedCode.
- * 
+ *
  * This function is used for printing the output of commands pdg and pdgo.
  * It can print the decompiled code with or without offsets. If line_offsets is a null pointer,
  * the output will be printed without offsets (pdg), otherwise, the output will be
  * printed with offsets.
  * This function will print the output in console using the function r_cons_printf();
- * 
+ *
  * @param code Pointer to a RAnnotatedCode.
  * @param line_offsets Pointer to a @ref RVector that contains offsets for the decompiled code.
  */
 R_API void r_codemeta_print(RCodeMeta *code, RVector *line_offsets);
 /**
  * @brief  Prints the decompiled code as comments
- * 
+ *
  * This function is used for the output of command pdg*
  * Output will be printed in console using the function r_cons_printf();
- * 
+ *
  * @param code Pointer to a RAnnotatedCode.
  */
 R_API void r_codemeta_print_comment_cmds(RCodeMeta *code);

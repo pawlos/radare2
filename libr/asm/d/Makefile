@@ -13,7 +13,7 @@ all: ${F_SDB}
 %.sdb:%.sdb.txt
 	${SDB} $@ = < $<
 	test -f $@
-	${SDB} -C $@
+	${SDB} -t -C $@
 
 clean:
 	rm -f *.sdb *.c *.h *.gperf a.out

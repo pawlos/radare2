@@ -871,6 +871,7 @@ extern RBinPlugin r_bin_plugin_dyldcache;
 extern RBinPlugin r_bin_plugin_xnu_kernelcache;
 extern RBinPlugin r_bin_plugin_avr;
 extern RBinPlugin r_bin_plugin_menuet;
+extern RBinPlugin r_bin_plugin_wad;
 extern RBinPlugin r_bin_plugin_wasm;
 extern RBinPlugin r_bin_plugin_nro;
 extern RBinPlugin r_bin_plugin_nso;
@@ -879,6 +880,7 @@ extern RBinPlugin r_bin_plugin_z64;
 extern RBinPlugin r_bin_plugin_prg;
 extern RBinPlugin r_bin_plugin_dmp64;
 extern RBinPlugin r_bin_plugin_pyc;
+extern RBinPlugin r_bin_plugin_off;
 
 #ifdef __cplusplus
 }

@@ -346,6 +346,26 @@ static const char *help_msg_pda[] = {
 	NULL
 };
 
+static const char *help_msg_pde[] = {
+	"Usage:", "pde[q|qq|j] [N]", "Disassemble N instructions following execution flow from current PC",
+	"pde", "", "disassemble N instructions following execution flow from current PC",
+	"pdej", "", "disassemble N instructions following execution flow from current PC in JSON",
+	NULL
+};
+
+static const char *help_msg_pdp[] = {
+	"Usage:", "pdp", "Disassemble by following pointers to read ropchains",
+	"pdp", "", "disassemble by following pointers to read ropchains",
+	NULL
+};
+
+static const char *help_msg_pdr[] = {
+	"Usage:", "pdr", "Disassemble N instructions following execution flow from current PC",
+	"pdr", "", "recursive disassemble across the function graph",
+	"pdr.", "", "recursive disassemble across the function graph (from current basic block)",
+	NULL
+};
+
 static const char *help_msg_pds[] = {
 	"Usage:", "pds[bf]", "Summarize N bytes or function",
 	"pdsf", "", "Summarize the current function",
@@ -531,6 +551,7 @@ static const char *help_msg_pv[] = {
 static const char *help_msg_px[] = {
 	"Usage:", "px[0afoswqWqQ][f]", " # Print heXadecimal",
 	"px", "", "show hexdump",
+	"px--", "[n]", "context hexdump (the hexdump version of pd--3)",
 	"px/", "", "same as x/ in gdb (help x)",
 	"px0", "", "8bit hexpair list of bytes until zero byte",
 	"pxa", "", "show annotated hexdump",
@@ -1603,6 +1624,23 @@ static void cmd_print_format(RCore *core, const char *_input, const ut8* block, 
 			char *space = strchr (name, ' ');
 			char *eq = strchr (name, '=');
 			char *dot = strchr (name, '.');
+			if (dot) {
+				*dot = 0;
+			}
+			if (!space && !sdb_const_get (core->print->formats, name, NULL)) {
+				eprintf ("Unknown format name '%s'.\n", name);
+				goto err_name;
+			}
+			if (dot) {
+				*dot = '.';
+			}
+			if (space) {
+				const char *afterspace = r_str_trim_head_ro (space + 1);
+				if (*afterspace == '=' && eq) {
+					r_str_cpy (space, afterspace);
+					space = NULL;
+				}
+			}
 
 			if (eq && !dot) {
 				*eq = ' ';
@@ -1614,7 +1652,7 @@ static void cmd_print_format(RCore *core, const char *_input, const ut8* block, 
 			if (space && (!eq || space < eq)) {
 				*space++ = 0;
 				if (strchr (name, '.')) {
-					eprintf ("Struct or fields name can not contain dot symbol (.)\n");
+					eprintf ("Struct or fields name can not contain a dot (%s)\n", name);
 				} else {
 					// pf.foo=xxx
 					sdb_set (core->print->formats, name, space, 0);
@@ -1653,6 +1691,7 @@ static void cmd_print_format(RCore *core, const char *_input, const ut8* block, 
 				eq = strchr (dot, '=');
 				if (eq) { // Write mode (pf.field=value)
 					*eq++ = 0;
+					r_str_trim_tail (name);
 					mode = R_PRINT_MUSTSET;
 					r_print_format (core->print, core->offset,
 						core->block, core->blocksize, name, mode, eq, dot);
@@ -2115,6 +2154,9 @@ R_API void r_core_print_examine(RCore *core, const char *str) {
 		cmd[n] = 0;
 		r_core_cmd0 (core, cmd);
 		break;
+	case 'w':
+		size = 4;
+		// fallthru
 	case 'x':
 		switch (size) {
 		default:
@@ -5416,6 +5458,10 @@ static int cmd_print(void *data, const char *input) {
 			if (!core->fixedblock && !sp) {
 				l /= 4;
 			}
+			if (input[2] == '?') { // "pde?"
+				r_core_cmd_help (core, help_msg_pde);
+				break;
+			};
 			int mode = R_MODE_PRINT;
 			if (input[2] == 'j') {
 				mode = R_MODE_JSON;
@@ -5440,6 +5486,11 @@ static int cmd_print(void *data, const char *input) {
 			break;
 		case 'r': // "pdr"
 			processed_cmd = true;
+			if (input[2] == '?') { // "pdr?"
+				r_core_cmd_help (core, help_msg_pdr);
+				pd_result = true;
+				break;
+			};
 			{
 				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, 0);
 				// R_ANAL_FCN_TYPE_FCN|R_ANAL_FCN_TYPE_SYM);
@@ -5583,6 +5634,11 @@ static int cmd_print(void *data, const char *input) {
 			break;
 		case 'p': // "pdp"
 			processed_cmd = true;
+			if (input[2] == '?') {
+				r_core_cmd_help (core, help_msg_pdp);
+				pd_result = true;
+				break;
+			};
 			disasm_ropchain (core, core->offset, 'D');
 			pd_result = true;
 			break;
@@ -5631,6 +5687,25 @@ static int cmd_print(void *data, const char *input) {
 			processed_cmd = true;
 			r_core_cmd_help (core, help_msg_pd);
 			pd_result = 0;
+		case '.':
+		case '-':
+		case '+':
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '$':
+		case '9':
+		case ' ':
+			break;
+		default:
+			eprintf ("Invalid pd subcommand.\n");
+			return 0;
 		}
 		if (formatted_json) {
 			if (r_cons_singleton ()->is_html) {
@@ -6190,22 +6265,32 @@ static int cmd_print(void *data, const char *input) {
 		cmd_print_op(core, input);
 		break;
 	case 'x': // "px"
-	{
-		bool show_offset = r_config_get_i (core->config, "hex.offset");
-		if (show_offset) {
-			core->print->flags |= R_PRINT_FLAGS_OFFSET;
+		if (input[1] == '-' && input[2] == '-') {
+			int rowsize = r_config_get_i (core->config, "hex.cols");
+			int ctxlines = r_num_math (core->num, input + 3);
+			if (ctxlines < 0) {
+				ctxlines = 0;
+			}
+			int size = rowsize + (rowsize * ctxlines * 2);
+			ut64 addr = core->offset - (rowsize * ctxlines);
+			r_core_cmdf (core, "px %d@0x%08"PFMT64x, size, addr);
+			break;
 		} else {
-			core->print->flags &= ~R_PRINT_FLAGS_OFFSET;
+			bool show_offset = r_config_get_i (core->config, "hex.offset");
+			if (show_offset) {
+				core->print->flags |= R_PRINT_FLAGS_OFFSET;
+			} else {
+				core->print->flags &= ~R_PRINT_FLAGS_OFFSET;
+			}
+			int show_header = r_config_get_i (core->config, "hex.header");
+			if (show_header) {
+				core->print->flags |= R_PRINT_FLAGS_HEADER;
+			} else {
+				core->print->flags &= ~R_PRINT_FLAGS_HEADER;
+			}
+			/* Don't show comments in default case */
+			core->print->use_comments = false;
 		}
-		int show_header = r_config_get_i (core->config, "hex.header");
-		if (show_header) {
-			core->print->flags |= R_PRINT_FLAGS_HEADER;
-		} else {
-			core->print->flags &= ~R_PRINT_FLAGS_HEADER;
-		}
-		/* Don't show comments in default case */
-		core->print->use_comments = false;
-	}
 		r_cons_break_push (NULL, NULL);
 		switch (input[1]) {
 		case 'j': // "pxj"

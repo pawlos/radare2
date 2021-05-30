@@ -1140,7 +1140,6 @@ typedef struct r_anal_esil_t {
 	int nowrite;
 	int iotrap;
 	int exectrap;
-	int repeat;
 	int parse_stop;
 	int parse_goto;
 	int parse_goto_count;
@@ -2129,6 +2128,8 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const u
 R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *op);
 R_API void r_anal_esil_cfg_merge_blocks(RAnalEsilCFG *cfg);
 R_API void r_anal_esil_cfg_free(RAnalEsilCFG *cfg);
+R_API SdbGperf *r_anal_get_gperf_cc(const char *k);
+R_API SdbGperf *r_anal_get_gperf_types(const char *k);
 
 R_API RAnalEsilDFGNode *r_anal_esil_dfg_node_new(RAnalEsilDFG *edf, const char *c);
 R_API RAnalEsilDFG *r_anal_esil_dfg_new(RReg *regs);

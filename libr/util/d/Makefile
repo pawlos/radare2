@@ -11,13 +11,14 @@ CWD=$(shell pwd)
 alle: $(F_SDB)
 
 %.sdb: %.sdb.txt
-	${SDB} $@ = < $<
+	$(SDB) $@ = < $<
+	$(SDB) -t -C $@
 	test -f $@
 
 install:
 	mkdir -p "$(R2_CHARSETS_PATH)"
 	for FILE in *.sdb ; do \
-		cp "${CWD}/$$FILE" "${R2_CHARSETS_PATH}/$$FILE" ; \
+		cp -f "${CWD}/$$FILE" "${R2_CHARSETS_PATH}/$$FILE" ; \
 	done
 
 uninstall:
