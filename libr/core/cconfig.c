@@ -3737,7 +3737,7 @@ R_API int r_core_config_init(RCore *core) {
 #endif
 	SETI ("http.maxsize", 0, "Maximum file size for upload");
 	SETPREF ("http.index", "index.html", "Main html file to check in directory");
-	SETPREF ("http.bind", "localhost", "Server address");
+	SETPREF ("http.bind", "localhost", "Server address (use 'public' for binding to 0.0.0.0)");
 	SETPREF ("http.homeroot", R_JOIN_2_PATHS ("~", R2_HOME_WWWROOT), "http home root directory");
 #if __WINDOWS__
 	{
@@ -3751,6 +3751,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("http.root", R2_WWWROOT, "http root directory");
 #endif
 	SETPREF ("http.port", "9090", "HTTP server port");
+	SETPREF ("http.basepath", "/", "Define base path for http requests");
 	SETPREF ("http.maxport", "9999", "Last HTTP server port");
 	SETPREF ("http.ui", "m", "Default webui (m, t, f)");
 	SETBPREF ("http.sandbox", "true", "Sandbox the HTTP server");
@@ -4014,11 +4015,12 @@ R_API int r_core_config_init(RCore *core) {
 	/* RVC */
 	{
 		char *p = r_file_path ("git");
-		bool found = (p && *p == 'g');
-		if (!found) {
+		if (strcmp (p, "git")) {
 			SETCB ("prj.vc.type", "git", &cb_prjvctype, "What should projects use as a vc");
 		} else {
-			//SETCB ("prj.vc.type", "rvc", &cb_prjvctype, "What should projects use as a vc"); //l8er
+			SETBPREF ("prj.vc", "false", "Use your version control system of choice (rvc, git) to manage projects");
+			/*The follwing is just a place holder*/
+			SETCB ("prj.vc.type", "rvc", &cb_prjvctype, "What should projects use as a vc");
 		}
 		free (p);
 	}

@@ -1228,19 +1228,10 @@ R_API int r_main_radare2(int argc, const char **argv) {
 			// NOTE: the baddr is redefined to support PIE/ASLR
 			baddr = r_debug_get_baddr (r->dbg, pfile);
 
-			if (baddr != UT64_MAX && baddr != 0 && r->dbg->verbose) {
-				eprintf ("bin.baddr 0x%08" PFMT64x "\n", baddr);
-			}
 			if (load_bin == LOAD_BIN_ALL) {
-				if (baddr && baddr != UT64_MAX && r->dbg->verbose) {
-					eprintf ("Using 0x%" PFMT64x "\n", baddr);
-				}
 				if (r_core_bin_load (r, pfile, baddr)) {
 					RBinObject *obj = r_bin_cur_object (r->bin);
 					if (obj && obj->info) {
-						if (r->dbg->verbose) {
-							eprintf ("asm.bits %d\n", obj->info->bits);
-						}
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__ && __x86_64__
 						ut64 bitness = r_config_get_i (r->config, "asm.bits");
 						if (bitness == 32) {

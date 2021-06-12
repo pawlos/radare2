@@ -1,5 +1,5 @@
 PKGNAME radare2
-VERSION 5.3.0-git
+VERSION 5.3.1
 CONTACT pancake ; pancake@nopcode.org
 
 LANG_C!
@@ -24,6 +24,7 @@ IFAND HAVE_LIB_MAGIC USE_MAGIC {
 	LIBMAGIC = '' ;
 }
 
+ARG_DISABLE WANT_THREADS threads disable use of thread apis ;
 
 (( useful for static builds . see sys/static.sh ))
 ARG_DISABLE LOADLIBS loadlibs disable loading plugins ;

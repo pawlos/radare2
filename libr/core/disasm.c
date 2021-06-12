@@ -520,7 +520,9 @@ static void ds_comment_(RDisasmState *ds, bool align, bool nl, const char *forma
 		if (!nl) {
 			break;
 		}
-		r_cons_newline ();
+		if (!ds->show_comment_right && nl) {
+			r_cons_newline ();
+		}
 		first = false;
 		p = nl + 1;
 	}
@@ -2398,7 +2400,6 @@ static void ds_show_flags(RDisasmState *ds, bool overlapped) {
 				color = r_cons_pal_parse (flag->color, NULL);
 				if (color) {
 					r_cons_strcat (color);
-					R_FREE (color);
 					ds->lastflag = flag;
 					hasColor = true;
 				}
@@ -2476,8 +2477,8 @@ static void ds_show_flags(RDisasmState *ds, bool overlapped) {
 		} else {
 			comma = ", ";
 		}
-		R_FREE (color);
 		nth++;
+		free (color);
 	}
 	if (!outline && *comma) {
 		if (nth > 0 && docolon) {

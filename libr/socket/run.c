@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2020 - pancake */
+/* radare - LGPL - Copyright 2014-2021 - pancake */
 
 /* this helper api is here because it depends on r_util and r_socket */
 /* we should find a better place for it. r_io? */
@@ -1073,7 +1073,7 @@ R_API int r_run_config_env(RRunProfile *p) {
 	}
 	if (p->_timeout) {
 #if __UNIX__
-		int mypid = getpid ();
+		int mypid = r_sys_getpid ();
 		if (!r_sys_fork ()) {
 			int use_signal = p->_timeout_sig;
 			if (use_signal < 1) {
@@ -1177,7 +1177,7 @@ R_API int r_run_start(RRunProfile *p) {
 			setsid ();
 			if (p->_timeout) {
 #if __UNIX__
-				int mypid = getpid ();
+				int mypid = r_sys_getpid ();
 				if (!r_sys_fork ()) {
 					int use_signal = p->_timeout_sig;
 					if (use_signal < 1) {
@@ -1236,11 +1236,11 @@ R_API int r_run_start(RRunProfile *p) {
 			}
 		}
 		if (p->_pid) {
-			eprintf ("PID: %d\n", getpid ());
+			eprintf ("PID: %d\n", r_sys_getpid ());
 		}
 		if (p->_pidfile) {
 			char pidstr[32];
-			snprintf (pidstr, sizeof (pidstr), "%d\n", getpid ());
+			snprintf (pidstr, sizeof (pidstr), "%d\n", r_sys_getpid ());
 			r_file_dump (p->_pidfile,
 				(const ut8*)pidstr,
 				strlen (pidstr), 0);
