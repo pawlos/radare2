@@ -2024,6 +2024,11 @@ static bool insert_mode_enabled(RCore *core) {
 	}
 	char arrows = r_cons_arrow_to_hjkl (ch);
 	switch (ch) {
+	case ':':
+		if (core->print->col != 2) {
+			r_core_visual_prompt_input (core);
+		}
+		break;
 	case 127:
 		core->print->cur = R_MAX (0, core->print->cur - 1);
 		return true;
@@ -2051,6 +2056,14 @@ static bool insert_mode_enabled(RCore *core) {
 			core->print->cur++;
 		}
 		return true;
+	} else {
+		if (ch == '+') {
+			// inc byte
+			r_core_cmdf (core, "woa 01 @ $$+%i!1", core->print->cur);
+		} else if (ch == '-') {
+			// dec byte
+			r_core_cmdf (core, "wos 01 @ $$+%i!1", core->print->cur);
+		}
 	}
 	ch = arrows;
 	/* hex column */
